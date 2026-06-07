@@ -1,0 +1,38 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Outer Baseball Leather Base -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M54,54 m-28,0 a28,28 0 1,1 56,0 a28,28 0 1,1 -56,0" />
+
+    <!-- Left Red Seam Line -->
+    <path
+        android:strokeColor="#EF4444"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M37,34 C46,43 46,65 37,74" />
+
+    <!-- Right Red Seam Line -->
+    <path
+        android:strokeColor="#EF4444"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M71,34 C62,43 62,65 71,74" />
+
+    <!-- Left Stitching Sewing Ticks -->
+    <path
+        android:strokeColor="#EF4444"
+        android:strokeWidth="1.2"
+        android:pathData="M39.5,41 L37.5,40 M42,47 L40,46 M42,54 L40,54 M42,61 L40,62 M39.5,67 L37.5,68" />
+
+    <!-- Right Stitching Sewing Ticks -->
+    <path
+        android:strokeColor="#EF4444"
+        android:strokeWidth="1.2"
+        android:pathData="M68.5,41 L70.5,40 M66,47 L68,46 M66,54 L68,54 M66,61 L68,62 M68.5,67 L70.5,68" />
+        
+</vector>
