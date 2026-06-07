@@ -1,6 +1,6 @@
 {
-  "name": "BaseLineup",
-  "description": "Baseball coach assistant to optimize defensive rotations, set lineups with league rules, track live play-by-play, and sync real-time rosters and stats.",
+  "name": "Baseball Lineup Assistant",
+  "description": "Baseball coach assistant to optimize defensive rotations, set lineups with league rules, and sync real-time rosters and stats.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

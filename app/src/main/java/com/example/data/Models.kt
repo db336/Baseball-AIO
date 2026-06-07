@@ -93,8 +93,44 @@ data class LineupEntry(
     val posInning3: String = "BENCH",
     val posInning4: String = "BENCH",
     val posInning5: String = "BENCH",
-    val posInning6: String = "BENCH"
+    val posInning6: String = "BENCH",
+    val posInning7: String = "BENCH",
+    val posInning8: String = "BENCH",
+    val posInning9: String = "BENCH",
+    val posInning10: String = "BENCH"
 )
+
+fun LineupEntry.getPosForInning(inning: Int): String {
+    return when(inning) {
+        1 -> posInning1
+        2 -> posInning2
+        3 -> posInning3
+        4 -> posInning4
+        5 -> posInning5
+        6 -> posInning6
+        7 -> posInning7
+        8 -> posInning8
+        9 -> posInning9
+        10 -> posInning10
+        else -> "BENCH"
+    }
+}
+
+fun LineupEntry.setPosForInning(inning: Int, pos: String): LineupEntry {
+    return when(inning) {
+        1 -> copy(posInning1 = pos)
+        2 -> copy(posInning2 = pos)
+        3 -> copy(posInning3 = pos)
+        4 -> copy(posInning4 = pos)
+        5 -> copy(posInning5 = pos)
+        6 -> copy(posInning6 = pos)
+        7 -> copy(posInning7 = pos)
+        8 -> copy(posInning8 = pos)
+        9 -> copy(posInning9 = pos)
+        10 -> copy(posInning10 = pos)
+        else -> this
+    }
+}
 
 @Entity(tableName = "announcements")
 data class Announcement(

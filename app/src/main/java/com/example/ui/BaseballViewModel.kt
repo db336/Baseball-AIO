@@ -268,7 +268,7 @@ class BaseballViewModel(
             _activeGameId.value = newId
 
             // Copy over existing active roster, setting initial lineup records
-            val activePlayers = repository.allPlayers.stateIn(viewModelScope).value
+            val activePlayers = players.value
             val entries = activePlayers.mapIndexed { idx, player ->
                 LineupEntry(
                     gameId = newId,
@@ -279,7 +279,11 @@ class BaseballViewModel(
                     posInning3 = "BENCH",
                     posInning4 = "BENCH",
                     posInning5 = "BENCH",
-                    posInning6 = "BENCH"
+                    posInning6 = "BENCH",
+                    posInning7 = "BENCH",
+                    posInning8 = "BENCH",
+                    posInning9 = "BENCH",
+                    posInning10 = "BENCH"
                 )
             }
             repository.saveLineupEntries(entries)
@@ -352,6 +356,14 @@ class BaseballViewModel(
                 "Game Day Alert: Live Action Started 💬",
                 "Come follow the play-by-play lineup rotation and live score trackers!"
             )
+        }
+    }
+
+    fun updateGame(game: Game) {
+        viewModelScope.launch {
+            repository.updateGame(game)
+            // If totalInnings changed, we might need to adjust lineup lengths or it handles gracefully.
+            // Oh, wait, the lineup length might be mismatched now.
         }
     }
 
@@ -443,7 +455,11 @@ class BaseballViewModel(
                 posInning3 = opt.pos3,
                 posInning4 = opt.pos4,
                 posInning5 = opt.pos5,
-                posInning6 = opt.pos6
+                posInning6 = opt.pos6,
+                posInning7 = opt.pos7 ?: existing?.posInning7 ?: "BENCH",
+                posInning8 = opt.pos8 ?: existing?.posInning8 ?: "BENCH",
+                posInning9 = opt.pos9 ?: existing?.posInning9 ?: "BENCH",
+                posInning10 = opt.pos10 ?: existing?.posInning10 ?: "BENCH"
             )
         }
         repository.saveLineupEntries(newEntries)

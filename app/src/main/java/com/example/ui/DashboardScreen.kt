@@ -48,6 +48,8 @@ import com.example.data.Announcement
 import com.example.data.Game
 import com.example.data.LineupEntry
 import com.example.data.Player
+import com.example.data.getPosForInning
+import com.example.data.setPosForInning
 import com.example.ui.theme.*
 
 // Supported defensive choices
@@ -75,6 +77,7 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
     var currentTab by remember { mutableStateOf("lineups") } // "roster", "lineups"
     var showAddPlayerDialog by remember { mutableStateOf(false) }
     var showAddGameDialog by remember { mutableStateOf(false) }
+    var gameToEdit by remember { mutableStateOf<Game?>(null) }
     var showEditTeamDialog by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -242,7 +245,10 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                         onPrintPdf = { viewModel.triggerPrintPdf() },
                         onExportPdf = { viewModel.triggerExportPdf() },
                         onExportSpreadsheet = { viewModel.triggerExportSpreadsheet() },
-                        onAddGameClick = { showAddGameDialog = true },
+                        onAddGameClick = { 
+                            gameToEdit = null
+                            showAddGameDialog = true 
+                        },
                         onReorder = { from, to -> viewModel.reorderLineup(from, to) }
                     )
                     "schedule" -> ScheduleTab(
@@ -251,8 +257,15 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                         teamName = teamName,
                         onSelectGame = { viewModel.selectActiveGame(it) },
                         onDeleteGame = { viewModel.deleteGame(it) },
-                        onAddGameClick = { showAddGameDialog = true },
-                        onExportCalendar = { viewModel.triggerExportCalendarSchedule() }
+                        onAddGameClick = { 
+                            gameToEdit = null
+                            showAddGameDialog = true 
+                        },
+                        onExportCalendar = { viewModel.triggerExportCalendarSchedule() },
+                        onEditGameClick = { game ->
+                            gameToEdit = game
+                            showAddGameDialog = true
+                        }
                     )
                 }
 
@@ -281,10 +294,31 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
 
                 if (showAddGameDialog) {
                     AddGameDialog(
-                        onDismiss = { showAddGameDialog = false },
+                        initialGame = gameToEdit,
+                        onDismiss = { 
+                            showAddGameDialog = false 
+                            gameToEdit = null
+                        },
                         onSave = { opp, date, time, minIn, maxPi, cont, limit, equalBench, maxBench, totalInn ->
-                            viewModel.addGame(opp, date, time, minIn, maxPi, cont, limit, equalBench, maxBench, totalInn)
+                            if (gameToEdit == null) {
+                                viewModel.addGame(opp, date, time, minIn, maxPi, cont, limit, equalBench, maxBench, totalInn)
+                            } else {
+                                val updatedGame = gameToEdit!!.copy(
+                                    opponent = opp,
+                                    gameDate = date,
+                                    gameTime = time,
+                                    minInningsDefense = minIn,
+                                    maxInningsPitcher = maxPi,
+                                    continuousBatting = cont,
+                                    runLimitPerInning = limit,
+                                    equalBenchRule = equalBench,
+                                    maxConsecutiveBench = maxBench,
+                                    totalInnings = totalInn
+                                )
+                                viewModel.updateGame(updatedGame)
+                            }
                             showAddGameDialog = false
+                            gameToEdit = null
                         }
                     )
                 }
@@ -1103,12 +1137,7 @@ fun LineupsTab(
                 if (player != null) {
                     val totalInns = activeGame?.totalInnings ?: 6
                     val isCurrentlyPitchingInCurrentGame = 
-                        (totalInns >= 1 && entry.posInning1 == "P") ||
-                        (totalInns >= 2 && entry.posInning2 == "P") ||
-                        (totalInns >= 3 && entry.posInning3 == "P") ||
-                        (totalInns >= 4 && entry.posInning4 == "P") ||
-                        (totalInns >= 5 && entry.posInning5 == "P") ||
-                        (totalInns >= 6 && entry.posInning6 == "P")
+                        (1..totalInns).any { entry.getPosForInning(it) == "P" }
 
                     // 1. Standard PitchSmart rest check
                     if (!player.pitchSmartEligible() && isCurrentlyPitchingInCurrentGame) {
@@ -1122,12 +1151,9 @@ fun LineupsTab(
                         if (sameEntry.playerId == player.id && sameDayGameIds.contains(sameEntry.gameId)) {
                             val matchingGame = sameDayGames.find { it.id == sameEntry.gameId }
                             val limitInns = matchingGame?.totalInnings ?: 6
-                            if (limitInns >= 1 && sameEntry.posInning1 == "P") totalPitchingInningsToday++
-                            if (limitInns >= 2 && sameEntry.posInning2 == "P") totalPitchingInningsToday++
-                            if (limitInns >= 3 && sameEntry.posInning3 == "P") totalPitchingInningsToday++
-                            if (limitInns >= 4 && sameEntry.posInning4 == "P") totalPitchingInningsToday++
-                            if (limitInns >= 5 && sameEntry.posInning5 == "P") totalPitchingInningsToday++
-                            if (limitInns >= 6 && sameEntry.posInning6 == "P") totalPitchingInningsToday++
+                            for (i in 1..limitInns) {
+                                if (sameEntry.getPosForInning(i) == "P") totalPitchingInningsToday++
+                            }
                         }
                     }
 
@@ -1143,21 +1169,16 @@ fun LineupsTab(
     // 1. Double assignments (two players on same position in same inning)
     val doubleAssignments = remember(activeLineup, activeGame) {
         val totalInns = activeGame?.totalInnings ?: 6
-        val inn1 = mutableSetOf<String>()
-        val inn2 = mutableSetOf<String>()
-        val inn3 = mutableSetOf<String>()
-        val inn4 = mutableSetOf<String>()
-        val inn5 = mutableSetOf<String>()
-        val inn6 = mutableSetOf<String>()
+        val innSets = Array(11) { mutableSetOf<String>() }
         val duplicates = mutableListOf<String>()
 
         activeLineup.forEach { entry ->
-            if (totalInns >= 1 && entry.posInning1 != "BENCH" && !inn1.add(entry.posInning1)) duplicates.add("Inning 1: Duplicate ${entry.posInning1}")
-            if (totalInns >= 2 && entry.posInning2 != "BENCH" && !inn2.add(entry.posInning2)) duplicates.add("Inning 2: Duplicate ${entry.posInning2}")
-            if (totalInns >= 3 && entry.posInning3 != "BENCH" && !inn3.add(entry.posInning3)) duplicates.add("Inning 3: Duplicate ${entry.posInning3}")
-            if (totalInns >= 4 && entry.posInning4 != "BENCH" && !inn4.add(entry.posInning4)) duplicates.add("Inning 4: Duplicate ${entry.posInning4}")
-            if (totalInns >= 5 && entry.posInning5 != "BENCH" && !inn5.add(entry.posInning5)) duplicates.add("Inning 5: Duplicate ${entry.posInning5}")
-            if (totalInns >= 6 && entry.posInning6 != "BENCH" && !inn6.add(entry.posInning6)) duplicates.add("Inning 6: Duplicate ${entry.posInning6}")
+            for (i in 1..totalInns) {
+                val pos = entry.getPosForInning(i)
+                if (pos != "BENCH" && !innSets[i].add(pos)) {
+                    duplicates.add("Inning $i: Duplicate $pos")
+                }
+            }
         }
         duplicates.distinct()
     }
@@ -1170,12 +1191,9 @@ fun LineupsTab(
             val sitCounts = mutableMapOf<Int, Int>()
             activeLineup.forEach { entry ->
                 var sits = 0
-                if (totalInns >= 1 && entry.posInning1 == "BENCH") sits++
-                if (totalInns >= 2 && entry.posInning2 == "BENCH") sits++
-                if (totalInns >= 3 && entry.posInning3 == "BENCH") sits++
-                if (totalInns >= 4 && entry.posInning4 == "BENCH") sits++
-                if (totalInns >= 5 && entry.posInning5 == "BENCH") sits++
-                if (totalInns >= 6 && entry.posInning6 == "BENCH") sits++
+                for (i in 1..totalInns) {
+                    if (entry.getPosForInning(i) == "BENCH") sits++
+                }
                 sitCounts[entry.playerId] = sits
             }
             val zeros = sitCounts.filter { it.value == 0 }.keys
@@ -1196,10 +1214,7 @@ fun LineupsTab(
         val totalInns = activeGame?.totalInnings ?: 6
         val violations = mutableListOf<String>()
         activeLineup.forEach { entry ->
-            val positions = listOf(
-                entry.posInning1, entry.posInning2, entry.posInning3,
-                entry.posInning4, entry.posInning5, entry.posInning6
-            ).take(totalInns)
+            val positions = (1..totalInns).map { entry.getPosForInning(it) }
             var currentConsec = 0
             var maxConsec = 0
             positions.forEach { pos ->
@@ -1228,15 +1243,7 @@ fun LineupsTab(
         if (activeLineup.isNotEmpty()) {
             for (inning in 1..totalInns) {
                 val assigned = activeLineup.map { entry ->
-                    when (inning) {
-                        1 -> entry.posInning1
-                        2 -> entry.posInning2
-                        3 -> entry.posInning3
-                        4 -> entry.posInning4
-                        5 -> entry.posInning5
-                        6 -> entry.posInning6
-                        else -> "BENCH"
-                    }
+                    entry.getPosForInning(inning)
                 }.toSet()
                 val missing = requiredPositions.filter { !assigned.contains(it) }
                 if (missing.isNotEmpty()) {
@@ -1665,14 +1672,7 @@ fun InningMatrixCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val innings = listOf(
-                    "I1" to entry.posInning1,
-                    "I2" to entry.posInning2,
-                    "I3" to entry.posInning3,
-                    "I4" to entry.posInning4,
-                    "I5" to entry.posInning5,
-                    "I6" to entry.posInning6
-                ).take(totalInnings)
+                val innings = (1..totalInnings).map { "I$it" to entry.getPosForInning(it) }
 
                 innings.forEachIndexed { idx, pair ->
                     var isMenuExpanded by remember { mutableStateOf(false) }
@@ -1708,14 +1708,7 @@ fun InningMatrixCard(
                                 DropdownMenuItem(
                                     text = { Text(text = p) },
                                     onClick = {
-                                        val updated = when (idx) {
-                                            0 -> entry.copy(posInning1 = p)
-                                            1 -> entry.copy(posInning2 = p)
-                                            2 -> entry.copy(posInning3 = p)
-                                            3 -> entry.copy(posInning4 = p)
-                                            4 -> entry.copy(posInning5 = p)
-                                            else -> entry.copy(posInning6 = p)
-                                        }
+                                        val updated = entry.setPosForInning(idx + 1, p)
                                         onUpdateEntry(updated)
                                         isMenuExpanded = false
                                     }
@@ -2171,14 +2164,7 @@ fun LiveDashboardTab(
 
                     val playerMap = players.associateBy { it.id }
                     val inningPositions = activeLineup.map { entry ->
-                        val pos = when (activeGame.currentInning) {
-                            1 -> entry.posInning1
-                            2 -> entry.posInning2
-                            3 -> entry.posInning3
-                            4 -> entry.posInning4
-                            5 -> entry.posInning5
-                            else -> entry.posInning6
-                        }
+                        val pos = entry.getPosForInning(activeGame.currentInning)
                         val player = playerMap[entry.playerId]
                         pos to (player?.name ?: "Unknown Player")
                     }.filter { it.first != "BENCH" }.sortedBy { it.first }
@@ -2454,23 +2440,24 @@ fun AnnouncementCard(announcement: Announcement) {
 // ========================== ADDITIONAL SUB-MODAL DIALOGS ==========================
 @Composable
 fun AddGameDialog(
+    initialGame: Game? = null,
     onDismiss: () -> Unit,
     onSave: (String, String, String, Int, Int, Boolean, Int, Boolean, Int, Int) -> Unit
 ) {
-    var opponent by remember { mutableStateOf("") }
-    var date by remember { mutableStateOf("June 10, 2026") }
-    var time by remember { mutableStateOf("6:00 PM") }
-    var minInnings by remember { mutableStateOf("4") }
-    var maxPitcher by remember { mutableStateOf("7") }
-    var continuous by remember { mutableStateOf(true) }
-    var runLimit by remember { mutableStateOf("5") }
-    var equalBenchRule by remember { mutableStateOf(true) }
-    var maxConsecutiveBench by remember { mutableStateOf("1") }
-    var totalInningsInput by remember { mutableStateOf("6") }
+    var opponent by remember { mutableStateOf(initialGame?.opponent ?: "") }
+    var date by remember { mutableStateOf(initialGame?.gameDate ?: "June 10, 2026") }
+    var time by remember { mutableStateOf(initialGame?.gameTime ?: "6:00 PM") }
+    var minInnings by remember { mutableStateOf((initialGame?.minInningsDefense ?: 4).toString()) }
+    var maxPitcher by remember { mutableStateOf((initialGame?.maxInningsPitcher ?: 7).toString()) }
+    var continuous by remember { mutableStateOf(initialGame?.continuousBatting ?: true) }
+    var runLimit by remember { mutableStateOf((initialGame?.runLimitPerInning ?: 5).toString()) }
+    var equalBenchRule by remember { mutableStateOf(initialGame?.equalBenchRule ?: true) }
+    var maxConsecutiveBench by remember { mutableStateOf((initialGame?.maxConsecutiveBench ?: 1).toString()) }
+    var totalInningsInput by remember { mutableStateOf((initialGame?.totalInnings ?: 7).toString()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Schedule New Game") },
+        title = { Text(if (initialGame == null) "Schedule New Game" else "Edit Game") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -2479,7 +2466,8 @@ fun AddGameDialog(
                 OutlinedTextField(
                     value = opponent,
                     onValueChange = { opponent = it },
-                    label = { Text("Opponent Team Name") },
+                    label = { Text("Opponent Team Name (Required)") },
+                    isError = opponent.isBlank(),
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
@@ -2526,7 +2514,7 @@ fun AddGameDialog(
                 OutlinedTextField(
                     value = totalInningsInput,
                     onValueChange = { totalInningsInput = it },
-                    label = { Text("Game Length (Innings: 1-6)") },
+                    label = { Text("Game Length (Innings: 1-10)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -2575,13 +2563,14 @@ fun AddGameDialog(
                             runLimit.toIntOrNull() ?: 5,
                             equalBenchRule,
                             maxConsecutiveBench.toIntOrNull() ?: 1,
-                            (totalInningsInput.toIntOrNull() ?: 6).coerceIn(1, 6)
+                            (totalInningsInput.toIntOrNull() ?: 7).coerceIn(1, 10)
                         )
                     }
                 },
+                enabled = opponent.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = OutfieldGreen)
             ) {
-                Text("Confirm Game")
+                Text(if (initialGame == null) "Confirm Game" else "Save Changes")
             }
         },
         dismissButton = {
@@ -2649,7 +2638,8 @@ fun ScheduleTab(
     onSelectGame: (Int) -> Unit,
     onDeleteGame: (Int) -> Unit,
     onAddGameClick: () -> Unit,
-    onExportCalendar: () -> Unit
+    onExportCalendar: () -> Unit,
+    onEditGameClick: (Game) -> Unit
 ) {
     val context = LocalContext.current
     var gameToDeleteId by remember { mutableStateOf<Int?>(null) }
@@ -2715,16 +2705,15 @@ fun ScheduleTab(
                 )
             }
             Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.offset(x = (-16).dp, y = (-12).dp)
             ) {
                 Button(
                     onClick = onExportCalendar,
                     colors = ButtonDefaults.buttonColors(containerColor = ClayAmber),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    modifier = Modifier
-                        .height(34.dp)
-                        .offset(x = (-16).dp, y = (-12).dp)
+                    modifier = Modifier.height(34.dp)
                 ) {
                     Icon(imageVector = Icons.Default.CalendarToday, contentDescription = "Export Schedule", modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
@@ -2734,10 +2723,7 @@ fun ScheduleTab(
                     onClick = onAddGameClick,
                     colors = ButtonDefaults.buttonColors(containerColor = OutfieldGreen),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    modifier = Modifier
-                        .height(34.dp)
-                        .rotate(-90f)
-                        .offset(x = 0.dp, y = (-12).dp)
+                    modifier = Modifier.height(34.dp)
                 ) {
                     Icon(imageVector = Icons.Default.Add, contentDescription = "Schedule Game", modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(3.dp))
@@ -2915,19 +2901,35 @@ fun ScheduleTab(
                                     }
                                 }
 
-                                IconButton(
-                                    onClick = {
-                                        gameToDeleteId = game.id
-                                        gameToDeleteOpponent = game.opponent
-                                    },
-                                    modifier = Modifier.size(32.dp).padding(top = 4.dp)
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Delete,
-                                        contentDescription = "Delete Game Matchup",
-                                        tint = TextSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
+                                    IconButton(
+                                        onClick = { onEditGameClick(game) },
+                                        modifier = Modifier.size(32.dp).padding(top = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Edit Game",
+                                            tint = ClayAmber,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            gameToDeleteId = game.id
+                                            gameToDeleteOpponent = game.opponent
+                                        },
+                                        modifier = Modifier.size(32.dp).padding(top = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete Game Matchup",
+                                            tint = TextSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                             }
                         }

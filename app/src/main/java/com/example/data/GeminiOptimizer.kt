@@ -48,7 +48,11 @@ object GeminiOptimizer {
         val pos3: String,
         val pos4: String,
         val pos5: String,
-        val pos6: String
+        val pos6: String,
+        val pos7: String? = null,
+        val pos8: String? = null,
+        val pos9: String? = null,
+        val pos10: String? = null
     )
 
     /**
@@ -155,10 +159,10 @@ object GeminiOptimizer {
                - Clean-up spot (4th) and 3rd spot should represent heavy seasonal hits.
                - Sort active players from battingOrder 1 down to N (number of active players).
             2. Defensive Rotations:
-               - We play 6 innings.
-               - In each inning (1 to 6), assigning a valid position to exactly 9 players on the field.
+               - We play ${game.totalInnings} innings.
+               - In each inning (1 to ${game.totalInnings}), assigning a valid position to exactly 9 players on the field.
                - Positions are: "P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "BENCH".
-               - Minimum defensive requirement: Every active player MUST be placed in fields for at least ${game.minInningsDefense} innings (cannot be "BENCH" more than 6 minus ${game.minInningsDefense} innings).
+               - Minimum defensive requirement: Every active player MUST be placed in fields for at least ${game.minInningsDefense} innings (cannot be "BENCH" more than ${game.totalInnings} minus ${game.minInningsDefense} innings).
                - Maximum pitching rule: No pitcher (e.g. "P" value) should exceed ${game.maxInningsPitcher} innings in total.
                - Equal Bench Rotation requirement: If equalBenchRule is true, do not sit any player on the bench for a second time until all active players have sat on the bench at least once.
                - Max Consecutive Bench requirement: Do not sit any player on the bench for more than ${game.maxConsecutiveBench} consecutive innings.
@@ -174,10 +178,7 @@ object GeminiOptimizer {
                    "battingOrder": 1,
                    "pos1": "CF",
                    "pos2": "CF",
-                   "pos3": "BENCH",
-                   "pos4": "SS",
-                   "pos5": "LF",
-                   "pos6": "RF"
+                   ... include pos3 up to pos${game.totalInnings}
                  },
                  ... continue for all active players
               ]
@@ -198,14 +199,16 @@ object GeminiOptimizer {
 
         val totalPlayers = players.size
         val fieldPositions = listOf("P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
-        val assignments = Array(totalPlayers) { Array(6) { "BENCH" } }
+        val totalInn = game.totalInnings
+        val assignments = Array(totalPlayers) { Array(10) { "BENCH" } }
 
         // Rules tracking state
         val sitCounts = IntArray(totalPlayers) { 0 }
         val consecutiveBench = IntArray(totalPlayers) { 0 }
         val pitchInningsCount = IntArray(totalPlayers) { 0 }
+        val hasFinishedPitching = BooleanArray(totalPlayers) { false }
 
-        for (inning in 0..5) {
+        for (inning in 0 until totalInn) {
             val mustPlay = mutableListOf<Int>()
             for (p in 0 until totalPlayers) {
                 if (consecutiveBench[p] >= game.maxConsecutiveBench) {
@@ -255,12 +258,27 @@ object GeminiOptimizer {
             val playersOnField = (0 until totalPlayers).filter { !selectedToSit.contains(it) }.toMutableList()
 
             // 1. Assign "P"
-            var selectedPitcherIdx = playersOnField.firstOrNull { p ->
-                pitchInningsCount[p] < game.maxInningsPitcher && players[p].preferredPosition == "P"
+            var selectedPitcherIdx: Int? = null
+
+            if (inning > 0) {
+                val lastPitcher = (0 until totalPlayers).find { assignments[it][inning - 1] == "P" }
+                if (lastPitcher != null) {
+                    if (playersOnField.contains(lastPitcher) && pitchInningsCount[lastPitcher] < game.maxInningsPitcher) {
+                        selectedPitcherIdx = lastPitcher
+                    } else {
+                        hasFinishedPitching[lastPitcher] = true
+                    }
+                }
+            }
+
+            if (selectedPitcherIdx == null) {
+                selectedPitcherIdx = playersOnField.firstOrNull { p ->
+                    pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p] && players[p].preferredPosition == "P"
+                }
             }
             if (selectedPitcherIdx == null) {
                 selectedPitcherIdx = playersOnField.firstOrNull { p ->
-                    pitchInningsCount[p] < game.maxInningsPitcher
+                    pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p]
                 }
             }
             if (selectedPitcherIdx == null && playersOnField.isNotEmpty()) {
@@ -309,7 +327,11 @@ object GeminiOptimizer {
                 pos3 = assignments[realIdx][2],
                 pos4 = assignments[realIdx][3],
                 pos5 = assignments[realIdx][4],
-                pos6 = assignments[realIdx][5]
+                pos6 = assignments[realIdx][5],
+                pos7 = assignments[realIdx][6],
+                pos8 = assignments[realIdx][7],
+                pos9 = assignments[realIdx][8],
+                pos10 = assignments[realIdx][9]
             )
         }
 

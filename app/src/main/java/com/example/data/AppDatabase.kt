@@ -73,7 +73,7 @@ interface BaseballDao {
     suspend fun clearAnnouncements()
 }
 
-@Database(entities = [Player::class, Game::class, LineupEntry::class, Announcement::class], version = 3, exportSchema = false)
+@Database(entities = [Player::class, Game::class, LineupEntry::class, Announcement::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun baseballDao(): BaseballDao
 }
