@@ -11,6 +11,7 @@ class BaseballRepository(private val db: AppDatabase) {
     val allPlayers: Flow<List<Player>> = dao.getAllPlayers()
     val allGames: Flow<List<Game>> = dao.getAllGames()
     val allAnnouncements: Flow<List<Announcement>> = dao.getAllAnnouncements()
+    val allLineupEntries: Flow<List<LineupEntry>> = dao.getAllLineups()
 
     suspend fun getPlayerById(id: Int): Player? = dao.getPlayerById(id)
     suspend fun insertPlayer(player: Player) = dao.insertPlayer(player)

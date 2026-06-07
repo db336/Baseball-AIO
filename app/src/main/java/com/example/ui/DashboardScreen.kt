@@ -12,6 +12,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,7 +28,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.*
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -36,6 +42,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.content.Intent
+import kotlin.math.roundToInt
 import com.example.data.Announcement
 import com.example.data.Game
 import com.example.data.LineupEntry
@@ -55,17 +63,19 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
     val activeGameId by viewModel.activeGameId.collectAsStateWithLifecycle()
     val activeGame by viewModel.activeGame.collectAsStateWithLifecycle()
     val activeLineup by viewModel.activeLineup.collectAsStateWithLifecycle()
+    val allLineupEntries by viewModel.allLineupEntries.collectAsStateWithLifecycle()
     
     val isOptimizing by viewModel.isOptimizing.collectAsStateWithLifecycle()
     val coachMessage by viewModel.coachMessage.collectAsStateWithLifecycle()
     val syncOn by viewModel.syncOn.collectAsStateWithLifecycle()
 
-    var currentTab by remember { mutableStateOf("lineups") } // "roster", "lineups", "live", "feed"
+    val teamName by viewModel.teamName.collectAsStateWithLifecycle()
+    val teamDivision by viewModel.teamDivision.collectAsStateWithLifecycle()
 
-    // Dialog state
+    var currentTab by remember { mutableStateOf("lineups") } // "roster", "lineups"
     var showAddPlayerDialog by remember { mutableStateOf(false) }
     var showAddGameDialog by remember { mutableStateOf(false) }
-    var showPostFeedDialog by remember { mutableStateOf(false) }
+    var showEditTeamDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -91,7 +101,7 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                         }
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
-                            val displayTitle = game?.let { "Wildcats vs ${it.opponent}" } ?: "BaseLineup Studio"
+                            val displayTitle = game?.let { "$teamName vs ${it.opponent}" } ?: "$teamName Studio"
                             Text(
                                 text = displayTitle,
                                 style = MaterialTheme.typography.titleMedium.copy(
@@ -142,6 +152,7 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                             )
                         }
                     }
+                    /*
                     IconButton(onClick = { showAddGameDialog = true }) {
                         Icon(
                             imageVector = Icons.Default.EventNote,
@@ -149,6 +160,7 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                             tint = SleekPrimary
                         )
                     }
+                    */
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
@@ -165,8 +177,7 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                 listOf(
                     Triple("roster", "Roster", Icons.Default.People),
                     Triple("lineups", "Lineups", Icons.Default.FormatListNumbered),
-                    Triple("live", "Live Game", Icons.Default.SportsBaseball),
-                    Triple("feed", "Team Feed", Icons.Default.Forum)
+                    Triple("schedule", "Schedule", Icons.Default.CalendarMonth)
                 ).forEach { (id, label, icon) ->
                     val selected = currentTab == id
                     NavigationBarItem(
@@ -207,39 +218,57 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                 when (currentTab) {
                     "roster" -> RosterTab(
                         players = players,
+                        teamName = teamName,
+                        teamDivision = teamDivision,
+                        onEditTeamClick = { showEditTeamDialog = true },
                         onAddClick = { showAddPlayerDialog = true },
                         onUpdatePlayer = { viewModel.updatePlayer(it) },
                         onDeletePlayer = { viewModel.deletePlayer(it) },
-                        onUpdateStats = { p, ab, h, w, r, rbi, so -> 
-                            viewModel.updatePlayerStats(p, ab, h, w, r, rbi, so) 
+                        onUpdateStats = { p, ab, h, w, r, rbi, so, pit, rst -> 
+                            viewModel.updatePlayerStats(p, ab, h, w, r, rbi, so, pit, rst) 
                         }
                     )
                     "lineups" -> LineupsTab(
                         players = players,
                         activeGame = activeGame,
                         activeLineup = activeLineup,
+                        allLineupEntries = allLineupEntries,
                         isOptimizing = isOptimizing,
                         coachMessage = coachMessage,
                         gamesList = games,
                         onSelectGame = { viewModel.selectActiveGame(it) },
                         onOptimize = { ai -> viewModel.optimizeLineup(aiMode = ai) },
-                        onUpdateEntry = { viewModel.updateSingleLineupEntry(it) }
+                        onUpdateEntry = { viewModel.updateSingleLineupEntry(it) },
+                        onPrintPdf = { viewModel.triggerPrintPdf() },
+                        onExportPdf = { viewModel.triggerExportPdf() },
+                        onExportSpreadsheet = { viewModel.triggerExportSpreadsheet() },
+                        onAddGameClick = { showAddGameDialog = true },
+                        onReorder = { from, to -> viewModel.reorderLineup(from, to) }
                     )
-                    "live" -> LiveDashboardTab(
-                        viewModel = viewModel,
-                        activeGame = activeGame,
-                        players = players,
-                        activeLineup = activeLineup
-                    )
-                    "feed" -> TeamFeedTab(
-                        announcements = announcements,
-                        syncOn = syncOn,
-                        onSyncToggle = { viewModel.setSyncOn(it) },
-                        onPostClick = { showPostFeedDialog = true }
+                    "schedule" -> ScheduleTab(
+                        games = games,
+                        activeGameId = activeGameId,
+                        teamName = teamName,
+                        onSelectGame = { viewModel.selectActiveGame(it) },
+                        onDeleteGame = { viewModel.deleteGame(it) },
+                        onAddGameClick = { showAddGameDialog = true },
+                        onExportCalendar = { viewModel.triggerExportCalendarSchedule() }
                     )
                 }
 
                 // Dialog integrations
+                if (showEditTeamDialog) {
+                    EditTeamDialog(
+                        currentName = teamName,
+                        currentDivision = teamDivision,
+                        onDismiss = { showEditTeamDialog = false },
+                        onSave = { name, div ->
+                            viewModel.updateTeamInfo(name, div)
+                            showEditTeamDialog = false
+                        }
+                    )
+                }
+
                 if (showAddPlayerDialog) {
                     AddPlayerDialog(
                         onDismiss = { showAddPlayerDialog = false },
@@ -253,19 +282,9 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                 if (showAddGameDialog) {
                     AddGameDialog(
                         onDismiss = { showAddGameDialog = false },
-                        onSave = { opp, date, time, minIn, maxPi, cont, limit ->
-                            viewModel.addGame(opp, date, time, minIn, maxPi, cont, limit)
+                        onSave = { opp, date, time, minIn, maxPi, cont, limit, equalBench, maxBench, totalInn ->
+                            viewModel.addGame(opp, date, time, minIn, maxPi, cont, limit, equalBench, maxBench, totalInn)
                             showAddGameDialog = false
-                        }
-                    )
-                }
-
-                if (showPostFeedDialog) {
-                    PostFeedDialog(
-                        onDismiss = { showPostFeedDialog = false },
-                        onPost = { title, content ->
-                            viewModel.postAnnouncement(title, content)
-                            showPostFeedDialog = false
                         }
                     )
                 }
@@ -376,10 +395,13 @@ fun QuickStatsRow(
 @Composable
 fun RosterTab(
     players: List<Player>,
+    teamName: String,
+    teamDivision: String,
+    onEditTeamClick: () -> Unit,
     onAddClick: () -> Unit,
     onUpdatePlayer: (Player) -> Unit,
     onDeletePlayer: (Int) -> Unit,
-    onUpdateStats: (Player, Int, Int, Int, Int, Int, Int) -> Unit
+    onUpdateStats: (Player, Int, Int, Int, Int, Int, Int, Int, Int) -> Unit
 ) {
     var selectedPlayerForStats by remember { mutableStateOf<Player?>(null) }
 
@@ -388,6 +410,65 @@ fun RosterTab(
             .fillMaxSize()
             .padding(16.dp)
     ) {
+        // Team Info Banner
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            colors = CardDefaults.cardColors(containerColor = StadiumSlateSurface),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                            .border(2.dp, TurfLime, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SportsBaseball,
+                            contentDescription = "Team Logo Badge",
+                            tint = TurfLime,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = teamName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = BaseballWhite
+                        )
+                        Text(
+                            text = "Division: $teamDivision  |  Roster Size: ${players.size}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary
+                        )
+                    }
+                }
+                
+                IconButton(
+                    onClick = onEditTeamClick,
+                    modifier = Modifier.testTag("edit_team_info_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit Team Information",
+                        tint = ClayAmber
+                    )
+                }
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -461,8 +542,8 @@ fun RosterTab(
             StatsEditorDialog(
                 player = player,
                 onDismiss = { selectedPlayerForStats = null },
-                onSave = { ab, h, w, r, rbi, so ->
-                    onUpdateStats(player, ab, h, w, r, rbi, so)
+                onSave = { ab, h, w, r, rbi, so, pit, rst ->
+                    onUpdateStats(player, ab, h, w, r, rbi, so, pit, rst)
                     selectedPlayerForStats = null
                 }
             )
@@ -477,95 +558,336 @@ fun RosterItemCard(
     onDelete: () -> Unit,
     onStatsClick: () -> Unit
 ) {
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation = false },
+            title = {
+                Text(
+                    text = "Delete Player?",
+                    color = BaseballWhite,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to remove ${player.name} (#${player.jerseyNumber}) from the roster? This action cannot be undone.",
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDelete()
+                        showDeleteConfirmation = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB91C1C))
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            },
+            containerColor = StadiumSlateSurface
+        )
+    }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = StadiumSlateSurface),
         shape = RoundedCornerShape(12.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Jersey Bubble
-            Box(
+        Box(modifier = Modifier.fillMaxWidth()) {
+            // Upper right PitchSmart status badge
+            val eligible = player.pitchSmartEligible()
+            val requiredRest = player.pitchSmartRequiredRest()
+            val daysRestLeft = (requiredRest - player.daysSinceLastPitched).coerceAtLeast(0)
+
+            Column(
                 modifier = Modifier
-                    .size(48.dp)
-                    .background(Color.White.copy(alpha = 0.05f), CircleShape)
-                    .border(2.dp, OutfieldGreen, CircleShape),
-                contentAlignment = Alignment.Center
+                    .align(Alignment.TopEnd)
+                    .padding(top = 10.dp, end = 12.dp),
+                horizontalAlignment = Alignment.End
             ) {
-                Text(
-                    text = "#${player.jerseyNumber}",
-                    fontWeight = FontWeight.Black,
-                    color = OutfieldGreen,
-                    fontSize = 16.sp
-                )
+                Box(
+                    modifier = Modifier
+                        .background(
+                            if (eligible) Color(0xFF15803D) else Color(0xFFB91C1C),
+                            RoundedCornerShape(4.dp)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (eligible) "PitchSmart: Eligible" else "Ineligible (Rest: ${daysRestLeft}d left)",
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                if (player.lastGamePitchCount > 0) {
+                    Text(
+                        text = "${player.lastGamePitchCount} pitches | rest: ${player.daysSinceLastPitched}d",
+                        color = TextSecondary,
+                        fontSize = 9.sp,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
+            // Main Content Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp, bottom = 16.dp, start = 16.dp, end = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Jersey Bubble
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                        .border(2.dp, OutfieldGreen, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "#${player.jerseyNumber}",
+                        fontWeight = FontWeight.Black,
+                        color = OutfieldGreen,
+                        fontSize = 16.sp
+                    )
+                }
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = player.name,
-                    fontWeight = FontWeight.Bold,
-                    color = BaseballWhite,
-                    fontSize = 16.sp
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    // Player Name
+                    Text(
+                        text = player.name,
+                        fontWeight = FontWeight.Bold,
+                        color = BaseballWhite,
+                        fontSize = 16.sp
+                    )
+
+                    // Batting Average BELOW Player Name
+                    Text(
+                        text = "AVG: ${player.formattedBattingAverage()}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ClayAmber,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+
+                    // Preferred Position
                     SuggestionChip(
                         onClick = {},
                         label = { Text("Pref: ${player.preferredPosition}", fontSize = 10.sp) },
                         colors = SuggestionChipDefaults.suggestionChipColors(
                             containerColor = MaterialTheme.colorScheme.background,
                             labelColor = TurfLime
-                        )
+                        ),
+                        modifier = Modifier.height(24.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "AVG: ${player.formattedBattingAverage()}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClayAmber,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                if (player.note.isNotEmpty()) {
-                    Text(
-                        text = player.note,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary,
-                        maxLines = 1
-                    )
-                }
-            }
 
-            // Controls
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Availability Switch (Parents/Coaches can set availability)
-                IconButton(onClick = { onUpdate(player.copy(isAvailable = !player.isAvailable)) }) {
-                    Icon(
-                        imageVector = if (player.isAvailable) Icons.Default.CheckCircle else Icons.Default.Cancel,
-                        contentDescription = "Toggle availability",
-                        tint = if (player.isAvailable) OutfieldGreen else Color.Red
-                    )
+                    if (player.note.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = player.note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            maxLines = 1
+                        )
+                    }
                 }
-                IconButton(onClick = onStatsClick) {
-                    Icon(
-                        imageVector = Icons.Default.Analytics,
-                        contentDescription = "Edit Stats",
-                        tint = TurfLime
-                    )
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete Player",
-                        tint = TextSecondary
-                    )
+
+                // Controls
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 10.dp)
+                ) {
+                    // Availability Switch
+                    IconButton(onClick = { onUpdate(player.copy(isAvailable = !player.isAvailable)) }) {
+                        Icon(
+                            imageVector = if (player.isAvailable) Icons.Default.CheckCircle else Icons.Default.Cancel,
+                            contentDescription = "Toggle availability",
+                            tint = if (player.isAvailable) OutfieldGreen else Color.Red
+                        )
+                    }
+                    var showNoteDialog by remember { mutableStateOf(false) }
+                    IconButton(onClick = { showNoteDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.EditNote,
+                            contentDescription = "Edit Player Notes",
+                            tint = ClayAmber
+                        )
+                    }
+                    if (showNoteDialog) {
+                        EditNoteDialog(
+                            player = player,
+                            onDismiss = { showNoteDialog = false },
+                            onSave = { newNote ->
+                                onUpdate(player.copy(note = newNote))
+                                showNoteDialog = false
+                            }
+                        )
+                    }
+                    IconButton(onClick = onStatsClick) {
+                        Icon(
+                            imageVector = Icons.Default.Analytics,
+                            contentDescription = "Edit Stats",
+                            tint = TurfLime
+                        )
+                    }
+                    IconButton(onClick = { showDeleteConfirmation = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete Player",
+                            tint = TextSecondary
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+
+@Composable
+fun EditNoteDialog(
+    player: Player,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var noteText by remember { mutableStateOf(player.note) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Edit Coach Notes: ${player.name}",
+                style = MaterialTheme.typography.titleMedium,
+                color = BaseballWhite,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Add custom strategic notes, parent contact details, or position feedback.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+                OutlinedTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it },
+                    label = { Text("Coach/Player Notes") },
+                    placeholder = { Text("Enter custom player notes...") },
+                    modifier = Modifier.fillMaxWidth().height(120.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = BaseballWhite,
+                        unfocusedTextColor = BaseballWhite,
+                        focusedLabelColor = TurfLime,
+                        unfocusedLabelColor = TextSecondary,
+                        focusedBorderColor = TurfLime,
+                        unfocusedBorderColor = StadiumGrayBorder
+                    ),
+                    maxLines = 4
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(noteText) },
+                colors = ButtonDefaults.buttonColors(containerColor = TurfLime)
+            ) {
+                Text("Save", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        },
+        containerColor = StadiumSlateSurface
+    )
+}
+
+@Composable
+fun EditTeamDialog(
+    currentName: String,
+    currentDivision: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var teamNameInput by remember { mutableStateOf(currentName) }
+    var teamDivisionInput by remember { mutableStateOf(currentDivision) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Edit Team Information",
+                fontWeight = FontWeight.Bold,
+                color = BaseballWhite
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = teamNameInput,
+                    onValueChange = { teamNameInput = it },
+                    label = { Text("Team Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = BaseballWhite,
+                        unfocusedTextColor = BaseballWhite,
+                        focusedLabelColor = TurfLime,
+                        unfocusedLabelColor = TextSecondary,
+                        focusedBorderColor = TurfLime,
+                        unfocusedBorderColor = TextSecondary.copy(alpha = 0.5f)
+                    )
+                )
+
+                OutlinedTextField(
+                    value = teamDivisionInput,
+                    onValueChange = { teamDivisionInput = it },
+                    label = { Text("Age Division (e.g., 18U, 12U)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = BaseballWhite,
+                        unfocusedTextColor = BaseballWhite,
+                        focusedLabelColor = TurfLime,
+                        unfocusedLabelColor = TextSecondary,
+                        focusedBorderColor = TurfLime,
+                        unfocusedBorderColor = TextSecondary.copy(alpha = 0.5f)
+                    )
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (teamNameInput.isNotBlank()) {
+                        onSave(teamNameInput, teamDivisionInput)
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = OutfieldGreen)
+            ) {
+                Text("Save Changes", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        },
+        containerColor = StadiumSlateSurface
+    )
 }
 
 
@@ -628,7 +950,7 @@ fun AddPlayerDialog(onDismiss: () -> Unit, onSave: (String, String, String, Stri
 fun StatsEditorDialog(
     player: Player,
     onDismiss: () -> Unit,
-    onSave: (Int, Int, Int, Int, Int, Int) -> Unit
+    onSave: (Int, Int, Int, Int, Int, Int, Int, Int) -> Unit
 ) {
     var ab by remember { mutableStateOf(player.atBats.toString()) }
     var hits by remember { mutableStateOf(player.hits.toString()) }
@@ -636,6 +958,8 @@ fun StatsEditorDialog(
     var runs by remember { mutableStateOf(player.runs.toString()) }
     var rbis by remember { mutableStateOf(player.rbis.toString()) }
     var so by remember { mutableStateOf(player.strikeouts.toString()) }
+    var lastGamePitchCount by remember { mutableStateOf(player.lastGamePitchCount.toString()) }
+    var daysSinceLastPitched by remember { mutableStateOf(player.daysSinceLastPitched.toString()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -690,6 +1014,29 @@ fun StatsEditorDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "PitchSmart 18U Tracking",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = lastGamePitchCount,
+                        onValueChange = { lastGamePitchCount = it },
+                        label = { Text("Last Game Pitches") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = daysSinceLastPitched,
+                        onValueChange = { daysSinceLastPitched = it },
+                        label = { Text("Days Rest Elapsed") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         },
         confirmButton = {
@@ -701,7 +1048,9 @@ fun StatsEditorDialog(
                         walks.toIntOrNull() ?: 0,
                         runs.toIntOrNull() ?: 0,
                         rbis.toIntOrNull() ?: 0,
-                        so.toIntOrNull() ?: 0
+                        so.toIntOrNull() ?: 0,
+                        lastGamePitchCount.toIntOrNull() ?: 0,
+                        daysSinceLastPitched.toIntOrNull() ?: 5
                     )
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = OutfieldGreen)
@@ -721,18 +1070,79 @@ fun LineupsTab(
     players: List<Player>,
     activeGame: Game?,
     activeLineup: List<LineupEntry>,
+    allLineupEntries: List<LineupEntry>,
     isOptimizing: Boolean,
     coachMessage: String,
     gamesList: List<Game>,
     onSelectGame: (Int) -> Unit,
     onOptimize: (Boolean) -> Unit,
-    onUpdateEntry: (LineupEntry) -> Unit
+    onUpdateEntry: (LineupEntry) -> Unit,
+    onPrintPdf: () -> Unit,
+    onExportPdf: () -> Unit,
+    onExportSpreadsheet: () -> Unit,
+    onAddGameClick: () -> Unit,
+    onReorder: (Int, Int) -> Unit
 ) {
     var showSelectGameDropdown by remember { mutableStateOf(false) }
+    var dismissFairPlayWarnings by remember(activeLineup, activeGame) { mutableStateOf(false) }
     
     // In-line validation checks:
+    val playerMap = remember(players) { players.associateBy { it.id } }
+    val totalInnings = activeGame?.totalInnings ?: 6
+
+    // PitchSmart safety checker for 18U + Same-day limit check
+    val pitchSmartViolations = remember(activeLineup, players, activeGame, gamesList, allLineupEntries) {
+        val violations = mutableListOf<String>()
+        val dateMatches = activeGame?.gameDate ?: ""
+        if (dateMatches.isNotEmpty()) {
+            val sameDayGames = gamesList.filter { it.gameDate == dateMatches }
+            val sameDayGameIds = sameDayGames.map { it.id }.toSet()
+
+            activeLineup.forEach { entry ->
+                val player = playerMap[entry.playerId]
+                if (player != null) {
+                    val totalInns = activeGame?.totalInnings ?: 6
+                    val isCurrentlyPitchingInCurrentGame = 
+                        (totalInns >= 1 && entry.posInning1 == "P") ||
+                        (totalInns >= 2 && entry.posInning2 == "P") ||
+                        (totalInns >= 3 && entry.posInning3 == "P") ||
+                        (totalInns >= 4 && entry.posInning4 == "P") ||
+                        (totalInns >= 5 && entry.posInning5 == "P") ||
+                        (totalInns >= 6 && entry.posInning6 == "P")
+
+                    // 1. Standard PitchSmart rest check
+                    if (!player.pitchSmartEligible() && isCurrentlyPitchingInCurrentGame) {
+                        val daysLeft = (player.pitchSmartRequiredRest() - player.daysSinceLastPitched).coerceAtLeast(0)
+                        violations.add("PitchSmart 18U Safety warning: ${player.name} is scheduled to PITCH but requires safety rest ($daysLeft days remaining).")
+                    }
+
+                    // 2. 7 innings calendar-day limit across all same-day game entries
+                    var totalPitchingInningsToday = 0
+                    allLineupEntries.forEach { sameEntry ->
+                        if (sameEntry.playerId == player.id && sameDayGameIds.contains(sameEntry.gameId)) {
+                            val matchingGame = sameDayGames.find { it.id == sameEntry.gameId }
+                            val limitInns = matchingGame?.totalInnings ?: 6
+                            if (limitInns >= 1 && sameEntry.posInning1 == "P") totalPitchingInningsToday++
+                            if (limitInns >= 2 && sameEntry.posInning2 == "P") totalPitchingInningsToday++
+                            if (limitInns >= 3 && sameEntry.posInning3 == "P") totalPitchingInningsToday++
+                            if (limitInns >= 4 && sameEntry.posInning4 == "P") totalPitchingInningsToday++
+                            if (limitInns >= 5 && sameEntry.posInning5 == "P") totalPitchingInningsToday++
+                            if (limitInns >= 6 && sameEntry.posInning6 == "P") totalPitchingInningsToday++
+                        }
+                    }
+
+                    if (totalPitchingInningsToday >= 7 && isCurrentlyPitchingInCurrentGame) {
+                        violations.add("PitchSmart Safety violation: ${player.name} is INELIGIBLE as a pitcher today because they are scheduled to pitch $totalPitchingInningsToday innings on this calendar day ($dateMatches). Limit is 7.")
+                    }
+                }
+            }
+        }
+        violations
+    }
+
     // 1. Double assignments (two players on same position in same inning)
-    val doubleAssignments = remember(activeLineup) {
+    val doubleAssignments = remember(activeLineup, activeGame) {
+        val totalInns = activeGame?.totalInnings ?: 6
         val inn1 = mutableSetOf<String>()
         val inn2 = mutableSetOf<String>()
         val inn3 = mutableSetOf<String>()
@@ -742,61 +1152,170 @@ fun LineupsTab(
         val duplicates = mutableListOf<String>()
 
         activeLineup.forEach { entry ->
-            if (entry.posInning1 != "BENCH" && !inn1.add(entry.posInning1)) duplicates.add("Inning 1: Duplicate ${entry.posInning1}")
-            if (entry.posInning2 != "BENCH" && !inn2.add(entry.posInning2)) duplicates.add("Inning 2: Duplicate ${entry.posInning2}")
-            if (entry.posInning3 != "BENCH" && !inn3.add(entry.posInning3)) duplicates.add("Inning 3: Duplicate ${entry.posInning3}")
-            if (entry.posInning4 != "BENCH" && !inn4.add(entry.posInning4)) duplicates.add("Inning 4: Duplicate ${entry.posInning4}")
-            if (entry.posInning5 != "BENCH" && !inn5.add(entry.posInning5)) duplicates.add("Inning 5: Duplicate ${entry.posInning5}")
-            if (entry.posInning6 != "BENCH" && !inn6.add(entry.posInning6)) duplicates.add("Inning 6: Duplicate ${entry.posInning6}")
+            if (totalInns >= 1 && entry.posInning1 != "BENCH" && !inn1.add(entry.posInning1)) duplicates.add("Inning 1: Duplicate ${entry.posInning1}")
+            if (totalInns >= 2 && entry.posInning2 != "BENCH" && !inn2.add(entry.posInning2)) duplicates.add("Inning 2: Duplicate ${entry.posInning2}")
+            if (totalInns >= 3 && entry.posInning3 != "BENCH" && !inn3.add(entry.posInning3)) duplicates.add("Inning 3: Duplicate ${entry.posInning3}")
+            if (totalInns >= 4 && entry.posInning4 != "BENCH" && !inn4.add(entry.posInning4)) duplicates.add("Inning 4: Duplicate ${entry.posInning4}")
+            if (totalInns >= 5 && entry.posInning5 != "BENCH" && !inn5.add(entry.posInning5)) duplicates.add("Inning 5: Duplicate ${entry.posInning5}")
+            if (totalInns >= 6 && entry.posInning6 != "BENCH" && !inn6.add(entry.posInning6)) duplicates.add("Inning 6: Duplicate ${entry.posInning6}")
         }
         duplicates.distinct()
     }
 
-    Column(
+    // 2. Equal bench rule validation
+    val equalBenchViolations = remember(activeLineup, activeGame) {
+        if (activeGame?.equalBenchRule != true) emptyList()
+        else {
+            val totalInns = activeGame.totalInnings
+            val sitCounts = mutableMapOf<Int, Int>()
+            activeLineup.forEach { entry ->
+                var sits = 0
+                if (totalInns >= 1 && entry.posInning1 == "BENCH") sits++
+                if (totalInns >= 2 && entry.posInning2 == "BENCH") sits++
+                if (totalInns >= 3 && entry.posInning3 == "BENCH") sits++
+                if (totalInns >= 4 && entry.posInning4 == "BENCH") sits++
+                if (totalInns >= 5 && entry.posInning5 == "BENCH") sits++
+                if (totalInns >= 6 && entry.posInning6 == "BENCH") sits++
+                sitCounts[entry.playerId] = sits
+            }
+            val zeros = sitCounts.filter { it.value == 0 }.keys
+            val twos = sitCounts.filter { it.value >= 2 }.keys
+            if (zeros.isNotEmpty() && twos.isNotEmpty()) {
+                val zeroNames = zeros.mapNotNull { playerMap[it]?.name }.joinToString(", ")
+                val twoNames = twos.mapNotNull { playerMap[it]?.name }.joinToString(", ")
+                listOf("Fair Play Bench Violation: $twoNames sat 2+ times, but $zeroNames have never sat.")
+            } else {
+                emptyList()
+            }
+        }
+    }
+
+    // 3. Consecutive bench rule validation
+    val consecutiveBenchViolations = remember(activeLineup, activeGame) {
+        val maxLimit = activeGame?.maxConsecutiveBench ?: 1
+        val totalInns = activeGame?.totalInnings ?: 6
+        val violations = mutableListOf<String>()
+        activeLineup.forEach { entry ->
+            val positions = listOf(
+                entry.posInning1, entry.posInning2, entry.posInning3,
+                entry.posInning4, entry.posInning5, entry.posInning6
+            ).take(totalInns)
+            var currentConsec = 0
+            var maxConsec = 0
+            positions.forEach { pos ->
+                if (pos == "BENCH") {
+                    currentConsec++
+                    if (currentConsec > maxConsec) {
+                        maxConsec = currentConsec
+                    }
+                } else {
+                    currentConsec = 0
+                }
+            }
+            if (maxConsec > maxLimit) {
+                val playerName = playerMap[entry.playerId]?.name ?: "Player"
+                violations.add("$playerName sat $maxConsec consecutive innings on bench (Max limit: $maxLimit).")
+            }
+        }
+        violations
+    }
+
+    // 4. Missing positions check (all 9 field positions must be filled each inning)
+    val unfilledPositionsWarnings = remember(activeLineup, activeGame) {
+        val totalInns = activeGame?.totalInnings ?: 6
+        val requiredPositions = listOf("P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
+        val warnings = mutableListOf<String>()
+        if (activeLineup.isNotEmpty()) {
+            for (inning in 1..totalInns) {
+                val assigned = activeLineup.map { entry ->
+                    when (inning) {
+                        1 -> entry.posInning1
+                        2 -> entry.posInning2
+                        3 -> entry.posInning3
+                        4 -> entry.posInning4
+                        5 -> entry.posInning5
+                        6 -> entry.posInning6
+                        else -> "BENCH"
+                    }
+                }.toSet()
+                val missing = requiredPositions.filter { !assigned.contains(it) }
+                if (missing.isNotEmpty()) {
+                    warnings.add("Inning $inning is missing: ${missing.joinToString(", ")}")
+                }
+            }
+        }
+        warnings
+    }
+
+    val allLineupWarnings = remember(doubleAssignments, equalBenchViolations, consecutiveBenchViolations, unfilledPositionsWarnings, dismissFairPlayWarnings, pitchSmartViolations) {
+        val list = mutableListOf<String>()
+        list.addAll(doubleAssignments)
+        if (!dismissFairPlayWarnings) {
+            list.addAll(equalBenchViolations)
+            list.addAll(consecutiveBenchViolations)
+        }
+        list.addAll(unfilledPositionsWarnings)
+        list.addAll(pitchSmartViolations)
+        list
+    }
+
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(top = 12.dp, bottom = 48.dp)
     ) {
-        // Active Game selector banner
-        Card(
-            colors = CardDefaults.cardColors(containerColor = StadiumSlateSurface),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+        // 1. Active Game selector banner scroll item
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = StadiumSlateSurface),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column {
-                    Text("Selected Matchup", fontSize = 12.sp, color = TextSecondary)
-                    Text(
-                        text = activeGame?.opponent?.let { "VS $it" } ?: "Select game schedule...",
-                        fontWeight = FontWeight.Bold,
-                        color = BaseballWhite,
-                        fontSize = 18.sp
-                    )
-                }
-
-                Box {
-                    Button(
-                        onClick = { showSelectGameDropdown = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = StadiumDarkBg)
-                    ) {
-                        Text("Switch Game", color = OutfieldGreen)
-                        Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = "", tint = OutfieldGreen)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Selected Matchup", fontSize = 12.sp, color = TextSecondary)
+                        Text(
+                            text = activeGame?.opponent?.let { "VS $it" } ?: "Select game schedule...",
+                            fontWeight = FontWeight.Bold,
+                            color = BaseballWhite,
+                            fontSize = 18.sp
+                        )
                     }
-                    DropdownMenu(
-                        expanded = showSelectGameDropdown,
-                        onDismissRequest = { showSelectGameDropdown = false }
-                    ) {
-                        gamesList.forEach { game ->
+
+                    Box {
+                        Button(
+                            onClick = { showSelectGameDropdown = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = StadiumDarkBg)
+                        ) {
+                            Text("Switch Game", color = OutfieldGreen)
+                            Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = "", tint = OutfieldGreen)
+                        }
+                        DropdownMenu(
+                            expanded = showSelectGameDropdown,
+                            onDismissRequest = { showSelectGameDropdown = false }
+                        ) {
+                            gamesList.forEach { game ->
+                                DropdownMenuItem(
+                                    text = { Text("vs ${game.opponent} (${game.gameDate})") },
+                                    onClick = {
+                                        onSelectGame(game.id)
+                                        showSelectGameDropdown = false
+                                    }
+                                )
+                            }
+                            HorizontalDivider(color = StadiumGrayBorder)
                             DropdownMenuItem(
-                                text = { Text("vs ${game.opponent} (${game.gameDate})") },
+                                text = { Text("+ Schedule New Game", color = TurfLime, fontWeight = FontWeight.Bold) },
                                 onClick = {
-                                    onSelectGame(game.id)
                                     showSelectGameDropdown = false
+                                    onAddGameClick()
                                 }
                             )
                         }
@@ -805,147 +1324,246 @@ fun LineupsTab(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        // 1b. Share, Print, and Export toolbar
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = StadiumSlateSurface),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "Dugout Lineup Share & Print",
+                        fontWeight = FontWeight.Bold,
+                        color = BaseballWhite,
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Print PDF card button
+                        Button(
+                            onClick = { onPrintPdf() },
+                            colors = ButtonDefaults.buttonColors(containerColor = SleekPrimary),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(imageVector = Icons.Default.Print, contentDescription = "Print", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Print Card", fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
 
-        // Optimizer trigger board
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            shape = RoundedCornerShape(28.dp),
-            modifier = Modifier.fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(28.dp))
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "Lineup AI & Algorithmic Optimizer",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 15.sp
-                )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Text(
-                    text = coachMessage,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // Export PDF button
+                        Button(
+                            onClick = { onExportPdf() },
+                            colors = ButtonDefaults.buttonColors(containerColor = SleekPrimaryDark),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(imageVector = Icons.Default.PictureAsPdf, contentDescription = "PDF", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Share PDF", fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+
+                        // Spreadsheet share button
+                        Button(
+                            onClick = { onExportSpreadsheet() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF107C41)), // Excel Green
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(imageVector = Icons.Default.TableChart, contentDescription = "CSV", modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("CSV Sheet", fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Optimizer trigger board scroll item
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(28.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(28.dp))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Lineup AI & Algorithmic Optimizer",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 15.sp
+                    )
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Text(
+                        text = coachMessage,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFFF3F4F9), RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { onOptimize(false) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE2E8F0)),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(20.dp))
+                                .testTag("instant_optimize_btn")
+                        ) {
+                            if (isOptimizing) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = SleekPrimary)
+                            } else {
+                                Icon(imageVector = Icons.Default.Bolt, contentDescription = "Optimize", tint = SleekPrimary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Local Fast Optimization", color = SleekTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        /*
+                        Button(
+                            onClick = { onOptimize(true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = SleekPrimaryDark),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier
+                                .weight(1.5f)
+                                .testTag("gemini_ai_optimize_btn")
+                        ) {
+                            if (isOptimizing) {
+                                CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White)
+                            } else {
+                                Icon(imageVector = Icons.Default.Psychology, contentDescription = "AI Optimize", tint = Color.White, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Gemini AI", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        */
+                    }
+                }
+            }
+        }
+
+        // 3. Live lineup rules validation feedback bar scroll item
+        if (allLineupWarnings.isNotEmpty()) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF2F2)),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFFF3F4F9), RoundedCornerShape(12.dp))
-                        .padding(12.dp)
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .border(1.dp, Color(0xFFFCA5A5), RoundedCornerShape(12.dp))
                 ) {
-                    Button(
-                        onClick = { onOptimize(false) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE2E8F0)),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .weight(1.5f)
-                            .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(20.dp))
-                            .testTag("instant_optimize_btn")
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.Top
                     ) {
-                        if (isOptimizing) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = SleekPrimary)
-                        } else {
-                            Icon(imageVector = Icons.Default.Bolt, contentDescription = "Optimize", tint = SleekPrimary, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Local Fast", color = SleekTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    Button(
-                        onClick = { onOptimize(true) },
-                        colors = ButtonDefaults.buttonColors(containerColor = SleekPrimaryDark),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .weight(1.5f)
-                            .testTag("gemini_ai_optimize_btn")
-                    ) {
-                        if (isOptimizing) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White)
-                        } else {
-                            Icon(imageVector = Icons.Default.Psychology, contentDescription = "AI Optimize", tint = Color.White, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Gemini AI", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Live double-position validation feedback bar
-        if (doubleAssignments.isNotEmpty()) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color.Red.copy(alpha = 0.15f)),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-                    .border(1.dp, Color.Red, RoundedCornerShape(8.dp))
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(imageVector = Icons.Default.Warning, contentDescription = "Warning", tint = Color.Red)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "Rotation Warning (Duplicate Assignments):",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.Red
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Warning",
+                            tint = Color(0xFFDC2626),
+                            modifier = Modifier.padding(top = 2.dp)
                         )
-                        doubleAssignments.forEach { warning ->
-                            Text(text = warning, fontSize = 11.sp, color = BaseballWhite)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Rotation & Fair-Play Warnings:",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF991B1B)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            allLineupWarnings.forEach { warning ->
+                                Text(
+                                    text = "• $warning",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFF7F1D1D)
+                                )
+                            }
+                            
+                            val hasFairPlay = remember(equalBenchViolations, consecutiveBenchViolations) {
+                                equalBenchViolations.isNotEmpty() || consecutiveBenchViolations.isNotEmpty()
+                            }
+                            if (hasFairPlay && !dismissFairPlayWarnings) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                TextButton(
+                                    onClick = { dismissFairPlayWarnings = true },
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .border(1.dp, Color(0xFFFCA5A5), RoundedCornerShape(8.dp)),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "Dismiss Fair-Play Warnings",
+                                        color = Color(0xFF991B1B),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Rostering Matrix view
-        Text(
-            text = "Squad Defensive Inning Rotation Matrix",
-            color = BaseballWhite,
-            fontWeight = FontWeight.Bold,
-            fontSize = 14.sp
-        )
-        Text(text = "Tap on any Inning badge below to manually edit playing position.", color = TextSecondary, fontSize = 11.sp)
+        // 4. Rostering Matrix header items
+        item {
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                Text(
+                    text = "Squad Defensive Inning Rotation Matrix",
+                    color = BaseballWhite,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Text(
+                    text = "Tap on any Inning badge below to manually edit playing position.",
+                    color = TextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+        }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
+        // 5. Active dynamic lineups items
         if (activeLineup.isEmpty()) {
-            Box(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Select or create a scheduled game first to design lineups.", color = TextSecondary)
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Select or create a scheduled game first to design lineups.", color = TextSecondary)
+                }
             }
         } else {
-            val playerMap = players.associateBy { it.id }
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(activeLineup) { entry ->
-                    val player = playerMap[entry.playerId]
-                    if (player != null) {
-                        InningMatrixCard(
-                            player = player,
-                            entry = entry,
-                            onUpdateEntry = onUpdateEntry
-                        )
-                    }
+            itemsIndexed(activeLineup) { index, entry ->
+                val player = playerMap[entry.playerId]
+                if (player != null) {
+                    InningMatrixCard(
+                        index = index,
+                        player = player,
+                        entry = entry,
+                        onUpdateEntry = onUpdateEntry,
+                        totalInnings = totalInnings,
+                        onReorder = onReorder
+                    )
                 }
             }
         }
@@ -956,22 +1574,72 @@ val SmartGrey = Color(0xFF475569)
 
 @Composable
 fun InningMatrixCard(
+    index: Int,
     player: Player,
     entry: LineupEntry,
-    onUpdateEntry: (LineupEntry) -> Unit
+    onUpdateEntry: (LineupEntry) -> Unit,
+    totalInnings: Int,
+    onReorder: (Int, Int) -> Unit
 ) {
+    val density = LocalDensity.current
+    val rowHeightPx = with(density) { 110.dp.toPx() } // estimate card row height plus padding
+    var dragOffsetY by remember { mutableStateOf(0f) }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = StadiumSlateSurface),
-        shape = RoundedCornerShape(8.dp)
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier
+            .offset { IntOffset(0, dragOffsetY.roundToInt()) }
+            .zIndex(if (dragOffsetY != 0f) 5f else 0f)
+            .padding(vertical = 4.dp)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            // Player Title row
+            // Player Title row with Drag Handle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // GRAB BAR for Reordering
+                    Box(
+                        modifier = Modifier
+                            .pointerInput(index) {
+                                detectDragGestures(
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        dragOffsetY += dragAmount.y
+                                        
+                                        if (dragOffsetY > rowHeightPx) {
+                                            onReorder(index, index + 1)
+                                            dragOffsetY -= rowHeightPx
+                                        } else if (dragOffsetY < -rowHeightPx) {
+                                            onReorder(index, index - 1)
+                                            dragOffsetY += rowHeightPx
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        dragOffsetY = 0f
+                                    },
+                                    onDragCancel = {
+                                        dragOffsetY = 0f
+                                    }
+                                )
+                            }
+                            .padding(end = 10.dp)
+                            .size(36.dp)
+                            .background(StadiumDarkBg, RoundedCornerShape(6.dp))
+                            .border(1.dp, StadiumGrayBorder, RoundedCornerShape(6.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DragHandle,
+                            contentDescription = "Grab Handle to Drag Up or Down",
+                            tint = OutfieldGreen,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
                     Box(
                         modifier = Modifier
                             .size(28.dp)
@@ -987,28 +1655,6 @@ fun InningMatrixCard(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(text = "${player.name} (#${player.jerseyNumber})", fontWeight = FontWeight.Bold, color = BaseballWhite)
-                }
-
-                // Adjust Batting Order
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = {
-                            if (entry.battingOrder > 1) {
-                                onUpdateEntry(entry.copy(battingOrder = entry.battingOrder - 1))
-                            }
-                        },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.KeyboardArrowUp, contentDescription = "", tint = TextSecondary)
-                    }
-                    IconButton(
-                        onClick = {
-                            onUpdateEntry(entry.copy(battingOrder = entry.battingOrder + 1))
-                        },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = "", tint = TextSecondary)
-                    }
                 }
             }
 
@@ -1026,7 +1672,7 @@ fun InningMatrixCard(
                     "I4" to entry.posInning4,
                     "I5" to entry.posInning5,
                     "I6" to entry.posInning6
-                )
+                ).take(totalInnings)
 
                 innings.forEachIndexed { idx, pair ->
                     var isMenuExpanded by remember { mutableStateOf(false) }
@@ -1809,15 +2455,18 @@ fun AnnouncementCard(announcement: Announcement) {
 @Composable
 fun AddGameDialog(
     onDismiss: () -> Unit,
-    onSave: (String, String, String, Int, Int, Boolean, Int) -> Unit
+    onSave: (String, String, String, Int, Int, Boolean, Int, Boolean, Int, Int) -> Unit
 ) {
     var opponent by remember { mutableStateOf("") }
     var date by remember { mutableStateOf("June 10, 2026") }
     var time by remember { mutableStateOf("6:00 PM") }
-    var minInnings by remember { mutableStateOf("2") }
-    var maxPitcher by remember { mutableStateOf("2") }
+    var minInnings by remember { mutableStateOf("4") }
+    var maxPitcher by remember { mutableStateOf("7") }
     var continuous by remember { mutableStateOf(true) }
     var runLimit by remember { mutableStateOf("5") }
+    var equalBenchRule by remember { mutableStateOf(true) }
+    var maxConsecutiveBench by remember { mutableStateOf("1") }
+    var totalInningsInput by remember { mutableStateOf("6") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1874,6 +2523,42 @@ fun AddGameDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(
+                    value = totalInningsInput,
+                    onValueChange = { totalInningsInput = it },
+                    label = { Text("Game Length (Innings: 1-6)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+                
+                Text(
+                    text = "Advanced Lineup Rules",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Equal Bench Rotation (Fair Play)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text("No player sits twice before everyone sits once", fontSize = 11.sp, color = TextSecondary)
+                    }
+                    Switch(checked = equalBenchRule, onCheckedChange = { equalBenchRule = it })
+                }
+
+                OutlinedTextField(
+                    value = maxConsecutiveBench,
+                    onValueChange = { maxConsecutiveBench = it },
+                    label = { Text("Max Consecutive Bench Innings") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
@@ -1884,10 +2569,13 @@ fun AddGameDialog(
                             opponent,
                             date,
                             time,
-                            minInnings.toIntOrNull() ?: 2,
-                            maxPitcher.toIntOrNull() ?: 2,
+                            minInnings.toIntOrNull() ?: 4,
+                            maxPitcher.toIntOrNull() ?: 7,
                             continuous,
-                            runLimit.toIntOrNull() ?: 5
+                            runLimit.toIntOrNull() ?: 5,
+                            equalBenchRule,
+                            maxConsecutiveBench.toIntOrNull() ?: 1,
+                            (totalInningsInput.toIntOrNull() ?: 6).coerceIn(1, 6)
                         )
                     }
                 },
@@ -1947,6 +2635,305 @@ fun PostFeedDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+        },
+        containerColor = StadiumSlateSurface
     )
+}
+
+// ========================== SCHEDULE TAB ==========================
+@Composable
+fun ScheduleTab(
+    games: List<Game>,
+    activeGameId: Int?,
+    teamName: String,
+    onSelectGame: (Int) -> Unit,
+    onDeleteGame: (Int) -> Unit,
+    onAddGameClick: () -> Unit,
+    onExportCalendar: () -> Unit
+) {
+    val context = LocalContext.current
+    var gameToDeleteId by remember { mutableStateOf<Int?>(null) }
+    var gameToDeleteOpponent by remember { mutableStateOf("") }
+
+    if (gameToDeleteId != null) {
+        AlertDialog(
+            onDismissRequest = { gameToDeleteId = null },
+            title = {
+                Text(
+                    text = "Delete Game Matchup?",
+                    color = BaseballWhite,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to remove the scheduled game against $gameToDeleteOpponent? This will also purge its active lineups and inning records.",
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        gameToDeleteId?.let { id -> onDeleteGame(id) }
+                        gameToDeleteId = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB91C1C))
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { gameToDeleteId = null }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            },
+            containerColor = StadiumSlateSurface
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.padding(top = 18.dp)) {
+                Text(
+                    text = "Game Schedule",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = BaseballWhite
+                )
+                Text(
+                    text = "${games.size} matchups scheduled",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onExportCalendar,
+                    colors = ButtonDefaults.buttonColors(containerColor = ClayAmber),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .height(34.dp)
+                        .offset(x = (-16).dp, y = (-12).dp)
+                ) {
+                    Icon(imageVector = Icons.Default.CalendarToday, contentDescription = "Export Schedule", modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Export All", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
+                Button(
+                    onClick = onAddGameClick,
+                    colors = ButtonDefaults.buttonColors(containerColor = OutfieldGreen),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier
+                        .height(34.dp)
+                        .rotate(-90f)
+                        .offset(x = 0.dp, y = (-12).dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Add, contentDescription = "Schedule Game", modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("New Game", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (games.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.CalendarMonth,
+                        contentDescription = "Empty Schedule",
+                        modifier = Modifier.size(64.dp),
+                        tint = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("No scheduled games yet.", color = BaseballWhite, fontWeight = FontWeight.Bold)
+                    Text("Tap 'New Game' above to add a match.", color = TextSecondary, fontSize = 13.sp)
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(games) { game ->
+                    val isActive = game.id == activeGameId
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isActive) StadiumSlateSurface.copy(alpha = 1.0f) else StadiumSlateSurface.copy(alpha = 0.5f)
+                        ),
+                        border = if (isActive) BorderStroke(1.5.dp, OutfieldGreen) else null,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Date Bubble
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                    .border(1.dp, if (isActive) OutfieldGreen else StadiumGrayBorder, RoundedCornerShape(8.dp))
+                                    .padding(4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Default.SportsBaseball,
+                                        contentDescription = "Match",
+                                        tint = if (isActive) OutfieldGreen else TextSecondary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        text = game.gameDate.replace("June ", "6/").replace("July ", "7/").replace(", 2026", ""),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = BaseballWhite,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(16.dp))
+
+                            // Details
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "$teamName vs ${game.opponent}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = BaseballWhite,
+                                    fontSize = 15.sp
+                                )
+                                Text(
+                                    text = "${game.gameDate} @ ${game.gameTime}",
+                                    fontSize = 11.sp,
+                                    color = TextSecondary
+                                )
+                                Row(
+                                    modifier = Modifier.padding(top = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Innings Badge
+                                    Box(
+                                        modifier = Modifier
+                                            .background(StadiumDarkBg, RoundedCornerShape(4.dp))
+                                            .border(0.5.dp, StadiumGrayBorder, RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("${game.totalInnings} Innings", fontSize = 9.sp, color = TurfLime, fontWeight = FontWeight.Bold)
+                                    }
+                                    
+                                    // Continuous Batting Badge
+                                    Box(
+                                        modifier = Modifier
+                                            .background(StadiumDarkBg, RoundedCornerShape(4.dp))
+                                            .border(0.5.dp, StadiumGrayBorder, RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(if (game.continuousBatting) "Continuous" else "Standard", fontSize = 9.sp, color = ClayAmber, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    // Status Badge
+                                    Box(
+                                        modifier = Modifier
+                                            .background(
+                                                when(game.status) {
+                                                    "Live" -> Color(0xFFB91C1C)
+                                                    "Completed" -> Color(0xFF15803D)
+                                                    else -> Color(0xFF475569)
+                                                },
+                                                RoundedCornerShape(4.dp)
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(game.status.uppercase(), fontSize = 9.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                
+                                // Google Calendar deep link button
+                                TextButton(
+                                    onClick = {
+                                        val url = com.example.utils.CalendarExporter.generateGoogleCalendarUrl(context, game)
+                                        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    contentPadding = PaddingValues(0.dp),
+                                    modifier = Modifier.height(28.dp).padding(top = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.OpenInNew,
+                                        contentDescription = "Add Single to Google Calendar",
+                                        tint = TurfLime,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Add to Google Calendar", fontSize = 11.sp, color = TurfLime, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            // Selection & Delete Controls
+                            Column(horizontalAlignment = Alignment.End) {
+                                if (isActive) {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(OutfieldGreen.copy(alpha = 0.15f), CircleShape)
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                            .border(1.dp, OutfieldGreen, CircleShape)
+                                    ) {
+                                        Text("ACTIVE", color = OutfieldGreen, fontSize = 9.sp, fontWeight = FontWeight.Black)
+                                    }
+                                } else {
+                                    TextButton(
+                                        onClick = { onSelectGame(game.id) },
+                                        colors = ButtonDefaults.textButtonColors(contentColor = OutfieldGreen)
+                                    ) {
+                                        Text("ACTIVATE", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        gameToDeleteId = game.id
+                                        gameToDeleteOpponent = game.opponent
+                                    },
+                                    modifier = Modifier.size(32.dp).padding(top = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Delete Game Matchup",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

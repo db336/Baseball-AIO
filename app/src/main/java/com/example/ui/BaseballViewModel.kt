@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.content.Context
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -13,7 +14,9 @@ import com.example.data.GeminiOptimizer
 import com.example.data.LineupEntry
 import com.example.data.Player
 import com.example.utils.NotificationHelper
+import com.example.utils.PdfExporter
 import com.example.utils.SpreadsheetExporter
+import com.example.utils.CalendarExporter
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -31,6 +34,23 @@ class BaseballViewModel(
 
     private val context = application.applicationContext
 
+    private val prefs = context.getSharedPreferences("baselineup_prefs", Context.MODE_PRIVATE)
+
+    private val _teamName = MutableStateFlow(prefs.getString("team_name", "Wildcats") ?: "Wildcats")
+    val teamName: StateFlow<String> = _teamName.asStateFlow()
+
+    private val _teamDivision = MutableStateFlow(prefs.getString("team_division", "18U") ?: "18U")
+    val teamDivision: StateFlow<String> = _teamDivision.asStateFlow()
+
+    fun updateTeamInfo(name: String, division: String) {
+        prefs.edit()
+            .putString("team_name", name)
+            .putString("team_division", division)
+            .apply()
+        _teamName.value = name
+        _teamDivision.value = division
+    }
+
     // DB state observers
     val players: StateFlow<List<Player>> = repository.allPlayers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -39,6 +59,9 @@ class BaseballViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val announcements: StateFlow<List<Announcement>> = repository.allAnnouncements
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allLineupEntries: StateFlow<List<LineupEntry>> = repository.allLineupEntries
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // UI State & Configurations
@@ -145,7 +168,9 @@ class BaseballViewModel(
         walks: Int,
         runs: Int,
         rbis: Int,
-        strikeouts: Int
+        strikeouts: Int,
+        lastGamePitchCount: Int,
+        daysSinceLastPitched: Int
     ) {
         viewModelScope.launch {
             repository.updatePlayer(
@@ -155,13 +180,37 @@ class BaseballViewModel(
                     walks = walks,
                     runs = runs,
                     rbis = rbis,
-                    strikeouts = strikeouts
+                    strikeouts = strikeouts,
+                    lastGamePitchCount = lastGamePitchCount,
+                    daysSinceLastPitched = daysSinceLastPitched
                 )
             )
         }
     }
 
     // --- Game Scheduled Management ---
+    private fun parseTimeToMinutes(timeStr: String): Int? {
+        try {
+            val cleaned = timeStr.trim().uppercase()
+            val amPm = if (cleaned.contains("PM")) "PM" else "AM"
+            val numbersPart = cleaned.replace("AM", "").replace("PM", "").trim()
+            val parts = numbersPart.split(":")
+            if (parts.isNotEmpty()) {
+                var hour = parts[0].toIntOrNull() ?: return null
+                val minute = if (parts.size > 1) parts[1].toIntOrNull() ?: 0 else 0
+                if (amPm == "PM" && hour < 12) {
+                    hour += 12
+                } else if (amPm == "AM" && hour == 12) {
+                    hour = 0
+                }
+                return hour * 60 + minute
+            }
+        } catch (e: Exception) {
+            // fallback
+        }
+        return null
+    }
+
     fun addGame(
         opponent: String,
         date: String,
@@ -169,9 +218,39 @@ class BaseballViewModel(
         minInningsDefense: Int,
         maxInningsPitcher: Int,
         continuousBatting: Boolean,
-        runLimit: Int
+        runLimit: Int,
+        equalBenchRule: Boolean,
+        maxConsecutiveBench: Int,
+        totalInnings: Int
     ) {
         viewModelScope.launch {
+            // Check calendar scheduling conflicts
+            val sameDayConflictMsg = run {
+                val newMint = parseTimeToMinutes(time) ?: return@run null
+                val existingGames = games.value
+                existingGames.forEach { g ->
+                    if (g.gameDate.trim().lowercase() == date.trim().lowercase()) {
+                        val extMint = parseTimeToMinutes(g.gameTime)
+                        if (extMint != null) {
+                            val diff = Math.abs(newMint - extMint)
+                            if (diff < 120) {
+                                return@run "Warning: Scheduled game times are too close! The matchup against ${g.opponent} at ${g.gameTime} is on the same day (${g.gameDate}) and less than 2 hours apart."
+                            }
+                        }
+                    }
+                }
+                null
+            }
+
+            if (sameDayConflictMsg != null) {
+                android.widget.Toast.makeText(context, sameDayConflictMsg, android.widget.Toast.LENGTH_LONG).show()
+                NotificationHelper.triggerTeamNotification(
+                    context,
+                    "Scheduling conflict notice ⚠️",
+                    sameDayConflictMsg
+                )
+            }
+
             val newGame = Game(
                 opponent = opponent,
                 gameDate = date,
@@ -180,7 +259,10 @@ class BaseballViewModel(
                 minInningsDefense = minInningsDefense,
                 maxInningsPitcher = maxInningsPitcher,
                 continuousBatting = continuousBatting,
-                runLimitPerInning = runLimit
+                runLimitPerInning = runLimit,
+                equalBenchRule = equalBenchRule,
+                maxConsecutiveBench = maxConsecutiveBench,
+                totalInnings = totalInnings
             )
             val newId = repository.insertGame(newGame)
             _activeGameId.value = newId
@@ -283,6 +365,29 @@ class BaseballViewModel(
         }
     }
 
+    fun deactivateActiveGame() {
+        _activeGameId.value = null
+    }
+
+    fun completeAndDeactivateGame(game: Game) {
+        viewModelScope.launch {
+            repository.updateGame(game.copy(status = "Completed"))
+            _activeGameId.value = null
+            
+            NotificationHelper.triggerTeamNotification(
+                context,
+                "Game Completed & Deactivated 📊",
+                "The game vs ${game.opponent} was completed and deactivated. You can now select or schedule another active game."
+            )
+            repository.insertAnnouncement(
+                Announcement(
+                    title = "Game Completed! vs ${game.opponent}",
+                    content = "Final Score: We scored ${game.runsOurTeam} runs to ${game.opponent}'s ${game.runsOpponent}. Match is now ended and deactivated."
+                )
+            )
+        }
+    }
+
     // --- Lineup and Rotations Operations ---
     fun updateSingleLineupEntry(entry: LineupEntry) {
         viewModelScope.launch {
@@ -351,6 +456,52 @@ class BaseballViewModel(
         val entries = activeLineup.value
         
         SpreadsheetExporter.exportGameAndStats(context, gameObj, allP, entries)
+    }
+
+    // --- Export Lineup to PDF ---
+    fun triggerExportPdf() {
+        val gameObj = activeGame.value ?: return
+        val allP = players.value
+        val entries = activeLineup.value
+        
+        val pdfFile = PdfExporter.generateLineupPdf(context, gameObj, allP, entries)
+        if (pdfFile != null) {
+            PdfExporter.exportAsPdf(context, pdfFile)
+        }
+    }
+
+    // --- Print Lineup ---
+    fun triggerPrintPdf() {
+        val gameObj = activeGame.value ?: return
+        val allP = players.value
+        val entries = activeLineup.value
+        
+        val pdfFile = PdfExporter.generateLineupPdf(context, gameObj, allP, entries)
+        if (pdfFile != null) {
+            PdfExporter.printPdf(context, pdfFile)
+        }
+    }
+
+    fun triggerExportCalendarSchedule() {
+        val currentGames = games.value
+        CalendarExporter.exportScheduleAsIcal(context, currentGames)
+    }
+
+    fun reorderLineup(fromIdx: Int, toIdx: Int) {
+        viewModelScope.launch {
+            val current = activeLineup.value
+            if (fromIdx !in current.indices || toIdx !in current.indices) return@launch
+            
+            val item = current[fromIdx]
+            val mutableList = current.toMutableList()
+            mutableList.removeAt(fromIdx)
+            mutableList.add(toIdx, item)
+            
+            val updatedEntries = mutableList.mapIndexed { index, entry ->
+                entry.copy(battingOrder = index + 1)
+            }
+            repository.saveLineupEntries(updatedEntries)
+        }
     }
 
     // --- Announcement Creation & Notification Broadcast ---

@@ -53,6 +53,9 @@ interface BaseballDao {
     @Query("SELECT * FROM lineup_entries WHERE gameId = :gameId")
     suspend fun getLineupForGame(gameId: Int): List<LineupEntry>
 
+    @Query("SELECT * FROM lineup_entries")
+    fun getAllLineups(): Flow<List<LineupEntry>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLineupEntries(entries: List<LineupEntry>)
 
@@ -70,7 +73,7 @@ interface BaseballDao {
     suspend fun clearAnnouncements()
 }
 
-@Database(entities = [Player::class, Game::class, LineupEntry::class, Announcement::class], version = 1, exportSchema = false)
+@Database(entities = [Player::class, Game::class, LineupEntry::class, Announcement::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun baseballDao(): BaseballDao
 }

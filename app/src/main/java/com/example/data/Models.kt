@@ -17,7 +17,10 @@ data class Player(
     val runs: Int = 0,
     val rbis: Int = 0,
     val strikeouts: Int = 0,
-    val note: String = ""
+    val note: String = "",
+    // PitchSmart tracking fields for 18U
+    val lastGamePitchCount: Int = 0,
+    val daysSinceLastPitched: Int = 5
 ) {
     val battingAverage: Double
         get() = if (atBats > 0) hits.toDouble() / atBats else 0.0
@@ -28,6 +31,23 @@ data class Player(
             String.format("%.3f", avg)
         } else {
             String.format(".%03d", (avg * 1000).toInt())
+        }
+    }
+
+    fun pitchSmartEligible(): Boolean {
+        if (lastGamePitchCount > 105) return false
+        val requiredRest = pitchSmartRequiredRest()
+        return daysSinceLastPitched >= requiredRest
+    }
+
+    fun pitchSmartRequiredRest(): Int {
+        return when {
+            lastGamePitchCount <= 0 -> 0
+            lastGamePitchCount <= 30 -> 0
+            lastGamePitchCount <= 45 -> 1
+            lastGamePitchCount <= 60 -> 2
+            lastGamePitchCount <= 75 -> 3
+            else -> 4
         }
     }
 }
@@ -45,6 +65,8 @@ data class Game(
     val maxInningsPitcher: Int = 2,
     val continuousBatting: Boolean = true, // Continuous batting order (all available players bat)
     val runLimitPerInning: Int = 5,
+    val equalBenchRule: Boolean = true, // No player can sit bench twice before all players have sat once
+    val maxConsecutiveBench: Int = 1, // Max consecutive innings a single player can be on the bench
     
     // Current Game Score (strictly live-tracking)
     val runsOurTeam: Int = 0,
@@ -53,7 +75,8 @@ data class Game(
     val currentOuts: Int = 0,
     val runnerOnFirst: Boolean = false,
     val runnerOnSecond: Boolean = false,
-    val runnerOnThird: Boolean = false
+    val runnerOnThird: Boolean = false,
+    val totalInnings: Int = 6
 )
 
 @Entity(tableName = "lineup_entries")

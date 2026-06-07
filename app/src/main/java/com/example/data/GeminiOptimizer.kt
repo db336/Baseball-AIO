@@ -143,6 +143,8 @@ object GeminiOptimizer {
             - Maximum innings a single Pitcher can throw: ${game.maxInningsPitcher}
             - Continuous Batting Order: ${game.continuousBatting} (all players active must be in the batting order, starting 1..N)
             - Run limit per inning: ${game.runLimitPerInning} runs.
+            - Equal Bench Rotation Rule (equalBenchRule): ${game.equalBenchRule} (if true, no player can sit on the bench twice before all players have sat once)
+            - Max Consecutive Bench Innings (maxConsecutiveBench): ${game.maxConsecutiveBench} (no player can sit on the bench for more than ${game.maxConsecutiveBench} consecutive innings)
             
             ACTIVE ROSTER TO ROTATE:
             $playersJson
@@ -158,6 +160,8 @@ object GeminiOptimizer {
                - Positions are: "P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "BENCH".
                - Minimum defensive requirement: Every active player MUST be placed in fields for at least ${game.minInningsDefense} innings (cannot be "BENCH" more than 6 minus ${game.minInningsDefense} innings).
                - Maximum pitching rule: No pitcher (e.g. "P" value) should exceed ${game.maxInningsPitcher} innings in total.
+               - Equal Bench Rotation requirement: If equalBenchRule is true, do not sit any player on the bench for a second time until all active players have sat on the bench at least once.
+               - Max Consecutive Bench requirement: Do not sit any player on the bench for more than ${game.maxConsecutiveBench} consecutive innings.
                - Exactly 1 player should be assigned to each of the 9 field positions per inning. Excess players are assigned to "BENCH".
             
             OUTPUT FORMAT:
@@ -192,64 +196,104 @@ object GeminiOptimizer {
                 .thenBy { it.jerseyNumber.toIntOrNull() ?: 99 }
         )
 
-        // 2. Defensive Inning-by-Inning Rotations (Innings 1..6)
-        // Positions lists:
-        val fieldPositions = listOf("P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
         val totalPlayers = players.size
-        
-        // Let's build assignments per player per inning.
-        // String matrix: player index -> Inning array [pos1, pos2, pos3, pos4, pos5, pos6]
+        val fieldPositions = listOf("P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
         val assignments = Array(totalPlayers) { Array(6) { "BENCH" } }
 
-        // Keep track of pitcher innings to respect pitch rule
-        var pitcherInnings = 0
-        var currentPitcherIndex = 0
+        // Rules tracking state
+        val sitCounts = IntArray(totalPlayers) { 0 }
+        val consecutiveBench = IntArray(totalPlayers) { 0 }
+        val pitchInningsCount = IntArray(totalPlayers) { 0 }
 
-        // For each inning, we want to assign players.
-        // Let's do a simple rotational queue. Every inning, we shift the starting offset of the queue
-        // so that different players "sit" or play different spots.
         for (inning in 0..5) {
-            val inningOffset = (inning * 3) % totalPlayers // deterministic offset rotation
-            val selectedForField = mutableListOf<Int>()
-            val selectedForBench = mutableListOf<Int>()
-
-            // To protect pitcher limit:
-            // "P" gets assigned to a dedicated player. If their limit is reached, shift pitcher index.
-            if (pitcherInnings >= game.maxInningsPitcher) {
-                currentPitcherIndex = (currentPitcherIndex + 1) % totalPlayers
-                pitcherInnings = 0
-            }
-
-            // We want to fill the 9 field positions
-            // Position 0 = "P" -> Assign to currentPitcherIndex if available, otherwise next
-            var pIndex = currentPitcherIndex
-            while (pIndex >= totalPlayers) {
-                pIndex %= totalPlayers
-            }
-            selectedForField.add(pIndex)
-            assignments[pIndex][inning] = "P"
-            pitcherInnings++
-
-            // Fill other 8 positions: "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"
-            var posPointer = 1 // Already assigned "P"
-            for (offset in 0 until totalPlayers) {
-                val pIdx = (inningOffset + offset) % totalPlayers
-                if (pIdx == pIndex) continue // Skip the pitcher we already set
-
-                if (posPointer < fieldPositions.size) {
-                    val posLabel = fieldPositions[posPointer]
-                    assignments[pIdx][inning] = posLabel
-                    selectedForField.add(pIdx)
-                    posPointer++
-                } else {
-                    assignments[pIdx][inning] = "BENCH"
-                    selectedForBench.add(pIdx)
+            val mustPlay = mutableListOf<Int>()
+            for (p in 0 until totalPlayers) {
+                if (consecutiveBench[p] >= game.maxConsecutiveBench) {
+                    mustPlay.add(p)
                 }
             }
+
+            val targetSitCount = Math.max(0, totalPlayers - 9)
+            val selectedToSit = mutableListOf<Int>()
+
+            if (targetSitCount > 0) {
+                val eligibleToSit = (0 until totalPlayers)
+                    .filter { !mustPlay.contains(it) }
+                    .toMutableList()
+
+                eligibleToSit.sortWith(
+                    compareBy<Int> { if (game.equalBenchRule) sitCounts[it] else 0 }
+                        .thenBy { consecutiveBench[it] }
+                        .thenBy { it }
+                )
+
+                val sitCountThisInning = Math.min(targetSitCount, eligibleToSit.size)
+                for (i in 0 until sitCountThisInning) {
+                    selectedToSit.add(eligibleToSit[i])
+                }
+
+                if (selectedToSit.size < targetSitCount) {
+                    val remainingSitsNeeded = targetSitCount - selectedToSit.size
+                    val fallbackCandidates = mustPlay.toMutableList()
+                    fallbackCandidates.sortBy { sitCounts[it] }
+                    for (i in 0 until Math.min(remainingSitsNeeded, fallbackCandidates.size)) {
+                        selectedToSit.add(fallbackCandidates[i])
+                    }
+                }
+            }
+
+            for (p in 0 until totalPlayers) {
+                if (selectedToSit.contains(p)) {
+                    assignments[p][inning] = "BENCH"
+                    sitCounts[p]++
+                    consecutiveBench[p]++
+                } else {
+                    consecutiveBench[p] = 0
+                }
+            }
+
+            val playersOnField = (0 until totalPlayers).filter { !selectedToSit.contains(it) }.toMutableList()
+
+            // 1. Assign "P"
+            var selectedPitcherIdx = playersOnField.firstOrNull { p ->
+                pitchInningsCount[p] < game.maxInningsPitcher && players[p].preferredPosition == "P"
+            }
+            if (selectedPitcherIdx == null) {
+                selectedPitcherIdx = playersOnField.firstOrNull { p ->
+                    pitchInningsCount[p] < game.maxInningsPitcher
+                }
+            }
+            if (selectedPitcherIdx == null && playersOnField.isNotEmpty()) {
+                selectedPitcherIdx = playersOnField.first()
+            }
+
+            if (selectedPitcherIdx != null) {
+                assignments[selectedPitcherIdx][inning] = "P"
+                pitchInningsCount[selectedPitcherIdx]++
+                playersOnField.remove(selectedPitcherIdx)
+            }
+
+            // 2. Assign other positions: "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"
+            val remainingPositions = mutableListOf("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
+            val assignedInThisStep = mutableListOf<Int>()
             
-            // Safety: if we had fewer than 9 players, fill remaining positions with P or others
-            if (posPointer < fieldPositions.size) {
-                // Not enough players, some positions remain empty or rotated
+            for (pIdx in playersOnField) {
+                val pref = players[pIdx].preferredPosition
+                if (remainingPositions.contains(pref)) {
+                    assignments[pIdx][inning] = pref
+                    remainingPositions.remove(pref)
+                    assignedInThisStep.add(pIdx)
+                }
+            }
+            playersOnField.removeAll(assignedInThisStep)
+
+            for (pIdx in playersOnField) {
+                if (remainingPositions.isNotEmpty()) {
+                    val pos = remainingPositions.removeAt(0)
+                    assignments[pIdx][inning] = pos
+                } else {
+                    assignments[pIdx][inning] = "BENCH"
+                }
             }
         }
 
