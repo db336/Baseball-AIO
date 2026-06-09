@@ -721,6 +721,7 @@ fun RosterItemCard(
 
                     // Controls
                     Row(
+                        modifier = Modifier.padding(top = 30.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // Availability Switch
