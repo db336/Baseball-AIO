@@ -285,8 +285,8 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                 if (showAddPlayerDialog) {
                     AddPlayerDialog(
                         onDismiss = { showAddPlayerDialog = false },
-                        onSave = { name, jersey, pref, note ->
-                            viewModel.addPlayer(name, jersey, pref, note)
+                        onSave = { name, jersey, pref, sec1, sec2, note ->
+                            viewModel.addPlayer(name, jersey, pref, sec1, sec2, note)
                             showAddPlayerDialog = false
                         }
                     )
@@ -671,115 +671,163 @@ fun RosterItemCard(
                 }
             }
 
-            // Main Content Row
-            Row(
+            // Main Content Column
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 16.dp, bottom = 16.dp, start = 16.dp, end = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(top = 16.dp, bottom = 12.dp, start = 16.dp, end = 16.dp)
             ) {
-                // Jersey Bubble
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(Color.White.copy(alpha = 0.05f), CircleShape)
-                        .border(2.dp, OutfieldGreen, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "#${player.jerseyNumber}",
-                        fontWeight = FontWeight.Black,
-                        color = OutfieldGreen,
-                        fontSize = 16.sp
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(16.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    // Player Name
-                    Text(
-                        text = player.name,
-                        fontWeight = FontWeight.Bold,
-                        color = BaseballWhite,
-                        fontSize = 16.sp
-                    )
-
-                    // Batting Average BELOW Player Name
-                    Text(
-                        text = "AVG: ${player.formattedBattingAverage()}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ClayAmber,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(vertical = 2.dp)
-                    )
-
-                    // Preferred Position
-                    SuggestionChip(
-                        onClick = {},
-                        label = { Text("Pref: ${player.preferredPosition}", fontSize = 10.sp) },
-                        colors = SuggestionChipDefaults.suggestionChipColors(
-                            containerColor = MaterialTheme.colorScheme.background,
-                            labelColor = TurfLime
-                        ),
-                        modifier = Modifier.height(24.dp)
-                    )
-
-                    if (player.note.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = player.note,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
-                            maxLines = 1
-                        )
-                    }
-                }
-
-                // Controls
+                // Top Row: Jersey, Name/AVG, and Controls
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 10.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Availability Switch
-                    IconButton(onClick = { onUpdate(player.copy(isAvailable = !player.isAvailable)) }) {
-                        Icon(
-                            imageVector = if (player.isAvailable) Icons.Default.CheckCircle else Icons.Default.Cancel,
-                            contentDescription = "Toggle availability",
-                            tint = if (player.isAvailable) OutfieldGreen else Color.Red
+                    // Jersey Bubble
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                            .border(2.dp, OutfieldGreen, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "#${player.jerseyNumber}",
+                            fontWeight = FontWeight.Black,
+                            color = OutfieldGreen,
+                            fontSize = 16.sp
                         )
                     }
-                    var showNoteDialog by remember { mutableStateOf(false) }
-                    IconButton(onClick = { showNoteDialog = true }) {
-                        Icon(
-                            imageVector = Icons.Default.EditNote,
-                            contentDescription = "Edit Player Notes",
-                            tint = ClayAmber
+
+                    Spacer(modifier = Modifier.width(16.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        // Player Name
+                        Text(
+                            text = player.name,
+                            fontWeight = FontWeight.Bold,
+                            color = BaseballWhite,
+                            fontSize = 16.sp
+                        )
+
+                        // Batting Average BELOW Player Name
+                        Text(
+                            text = "AVG: ${player.formattedBattingAverage()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ClayAmber,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(vertical = 2.dp)
                         )
                     }
-                    if (showNoteDialog) {
-                        EditNoteDialog(
-                            player = player,
-                            onDismiss = { showNoteDialog = false },
-                            onSave = { newNote ->
-                                onUpdate(player.copy(note = newNote))
-                                showNoteDialog = false
-                            }
+
+                    // Controls
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Availability Switch
+                        IconButton(onClick = { onUpdate(player.copy(isAvailable = !player.isAvailable)) }) {
+                            Icon(
+                                imageVector = if (player.isAvailable) Icons.Default.CheckCircle else Icons.Default.Cancel,
+                                contentDescription = "Toggle availability",
+                                tint = if (player.isAvailable) OutfieldGreen else Color.Red
+                            )
+                        }
+                        var showEditDialog by remember { mutableStateOf(false) }
+                        IconButton(onClick = { showEditDialog = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit Player Info",
+                                tint = ClayAmber
+                            )
+                        }
+                        if (showEditDialog) {
+                            EditPlayerInfoDialog(
+                                player = player,
+                                onDismiss = { showEditDialog = false },
+                                onSave = { name, jersey, preferred, sec1, sec2, note ->
+                                    onUpdate(player.copy(
+                                        name = name,
+                                        jerseyNumber = jersey,
+                                        preferredPosition = preferred,
+                                        secondaryPosition1 = sec1,
+                                        secondaryPosition2 = sec2,
+                                        note = note
+                                    ))
+                                    showEditDialog = false
+                                }
+                            )
+                        }
+                        IconButton(onClick = onStatsClick) {
+                            Icon(
+                                imageVector = Icons.Default.Analytics,
+                                contentDescription = "Edit Stats",
+                                tint = TurfLime
+                            )
+                        }
+                        IconButton(onClick = { showDeleteConfirmation = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete Player",
+                                tint = TextSecondary
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Bottom Row: Separated Position Badges
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Pref badge
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Black, RoundedCornerShape(4.dp))
+                            .border(1.dp, TurfLime.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 8.dp, vertical = 2.5.dp)
+                    ) {
+                        Text(
+                            text = "Pref: ${player.preferredPosition}",
+                            color = TurfLime,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp
                         )
                     }
-                    IconButton(onClick = onStatsClick) {
-                        Icon(
-                            imageVector = Icons.Default.Analytics,
-                            contentDescription = "Edit Stats",
-                            tint = TurfLime
-                        )
+
+                    // Sec 1 badge
+                    if (player.secondaryPosition1.trim().uppercase() != "BENCH" && player.secondaryPosition1.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .background(Color.Black, RoundedCornerShape(4.dp))
+                                .border(1.dp, TurfLime.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 8.dp, vertical = 2.5.dp)
+                        ) {
+                            Text(
+                                text = "Sec 1: ${player.secondaryPosition1.trim().uppercase()}",
+                                color = TurfLime.copy(alpha = 0.9f),
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 10.sp
+                            )
+                        }
                     }
-                    IconButton(onClick = { showDeleteConfirmation = true }) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Delete Player",
-                            tint = TextSecondary
-                        )
+
+                    // Sec 2 badge
+                    if (player.secondaryPosition2.trim().uppercase() != "BENCH" && player.secondaryPosition2.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .background(Color.Black, RoundedCornerShape(4.dp))
+                                .border(1.dp, TurfLime.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 8.dp, vertical = 2.5.dp)
+                        ) {
+                            Text(
+                                text = "Sec 2: ${player.secondaryPosition2.trim().uppercase()}",
+                                color = TurfLime.copy(alpha = 0.9f),
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 10.sp
+                            )
+                        }
                     }
                 }
             }
@@ -789,36 +837,38 @@ fun RosterItemCard(
 
 
 @Composable
-fun EditNoteDialog(
+fun EditPlayerInfoDialog(
     player: Player,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (name: String, jersey: String, preferred: String, secondary1: String, secondary2: String, note: String) -> Unit
 ) {
+    var nameText by remember { mutableStateOf(player.name) }
+    var jerseyText by remember { mutableStateOf(player.jerseyNumber) }
+    var preferredText by remember { mutableStateOf(player.preferredPosition) }
+    var secondary1Text by remember { mutableStateOf(player.secondaryPosition1) }
+    var secondary2Text by remember { mutableStateOf(player.secondaryPosition2) }
     var noteText by remember { mutableStateOf(player.note) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Edit Coach Notes: ${player.name}",
+                text = "Edit Player Info: ${player.name}",
                 style = MaterialTheme.typography.titleMedium,
                 color = BaseballWhite,
                 fontWeight = FontWeight.Bold
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Add custom strategic notes, parent contact details, or position feedback.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
-                )
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
                 OutlinedTextField(
-                    value = noteText,
-                    onValueChange = { noteText = it },
-                    label = { Text("Coach/Player Notes") },
-                    placeholder = { Text("Enter custom player notes...") },
-                    modifier = Modifier.fillMaxWidth().height(120.dp),
+                    value = nameText,
+                    onValueChange = { nameText = it },
+                    label = { Text("Player Name") },
+                    modifier = Modifier.fillMaxWidth().testTag("edit_player_name"),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = BaseballWhite,
                         unfocusedTextColor = BaseballWhite,
@@ -826,15 +876,93 @@ fun EditNoteDialog(
                         unfocusedLabelColor = TextSecondary,
                         focusedBorderColor = TurfLime,
                         unfocusedBorderColor = StadiumGrayBorder
-                    ),
-                    maxLines = 4
+                    )
+                )
+                OutlinedTextField(
+                    value = jerseyText,
+                    onValueChange = { jerseyText = it },
+                    label = { Text("Jersey Number") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth().testTag("edit_player_jersey"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = BaseballWhite,
+                        unfocusedTextColor = BaseballWhite,
+                        focusedLabelColor = TurfLime,
+                        unfocusedLabelColor = TextSecondary,
+                        focusedBorderColor = TurfLime,
+                        unfocusedBorderColor = StadiumGrayBorder
+                    )
+                )
+                OutlinedTextField(
+                    value = preferredText,
+                    onValueChange = { preferredText = it.uppercase() },
+                    label = { Text("Preferred Position (e.g., P, C, SS)") },
+                    modifier = Modifier.fillMaxWidth().testTag("edit_player_preferred"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = BaseballWhite,
+                        unfocusedTextColor = BaseballWhite,
+                        focusedLabelColor = TurfLime,
+                        unfocusedLabelColor = TextSecondary,
+                        focusedBorderColor = TurfLime,
+                        unfocusedBorderColor = StadiumGrayBorder
+                    )
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = secondary1Text,
+                        onValueChange = { secondary1Text = it.uppercase() },
+                        label = { Text("Secondary Pos 1") },
+                        modifier = Modifier.weight(1f).testTag("edit_player_sec1"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = BaseballWhite,
+                            unfocusedTextColor = BaseballWhite,
+                            focusedLabelColor = TurfLime,
+                            unfocusedLabelColor = TextSecondary,
+                            focusedBorderColor = TurfLime,
+                            unfocusedBorderColor = StadiumGrayBorder
+                        )
+                    )
+                    OutlinedTextField(
+                        value = secondary2Text,
+                        onValueChange = { secondary2Text = it.uppercase() },
+                        label = { Text("Secondary Pos 2") },
+                        modifier = Modifier.weight(1f).testTag("edit_player_sec2"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = BaseballWhite,
+                            unfocusedTextColor = BaseballWhite,
+                            focusedLabelColor = TurfLime,
+                            unfocusedLabelColor = TextSecondary,
+                            focusedBorderColor = TurfLime,
+                            unfocusedBorderColor = StadiumGrayBorder
+                        )
+                    )
+                }
+                OutlinedTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it },
+                    label = { Text("Coach/Player Notes") },
+                    placeholder = { Text("Enter custom player notes...") },
+                    modifier = Modifier.fillMaxWidth().height(80.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = BaseballWhite,
+                        unfocusedTextColor = BaseballWhite,
+                        focusedLabelColor = TurfLime,
+                        unfocusedLabelColor = TextSecondary,
+                        focusedBorderColor = TurfLime,
+                        unfocusedBorderColor = StadiumGrayBorder
+                    )
                 )
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSave(noteText) },
-                colors = ButtonDefaults.buttonColors(containerColor = TurfLime)
+                onClick = {
+                    if (nameText.isNotEmpty() && jerseyText.isNotEmpty()) {
+                        onSave(nameText, jerseyText, preferredText, secondary1Text, secondary2Text, noteText)
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = TurfLime),
+                modifier = Modifier.testTag("save_player_info_btn")
             ) {
                 Text("Save", color = Color.Black, fontWeight = FontWeight.Bold)
             }
@@ -927,17 +1055,25 @@ fun EditTeamDialog(
 
 // ========================== DIALOGS ==========================
 @Composable
-fun AddPlayerDialog(onDismiss: () -> Unit, onSave: (String, String, String, String) -> Unit) {
+fun AddPlayerDialog(
+    onDismiss: () -> Unit,
+    onSave: (name: String, jersey: String, preferred: String, secondary1: String, secondary2: String, note: String) -> Unit
+) {
     var name by remember { mutableStateOf("") }
     var jersey by remember { mutableStateOf("") }
     var prefPos by remember { mutableStateOf("LF") }
+    var secPos1 by remember { mutableStateOf("BENCH") }
+    var secPos2 by remember { mutableStateOf("BENCH") }
     var note by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add New Baseball Player") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -955,19 +1091,37 @@ fun AddPlayerDialog(onDismiss: () -> Unit, onSave: (String, String, String, Stri
                     value = prefPos,
                     onValueChange = { prefPos = it.uppercase() },
                     label = { Text("Preferred Position (e.g. CF, P, C, SS)") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("add_player_preferred")
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = secPos1,
+                        onValueChange = { secPos1 = it.uppercase() },
+                        label = { Text("Secondary Pos 1") },
+                        modifier = Modifier.weight(1f).testTag("add_player_sec1")
+                    )
+                    OutlinedTextField(
+                        value = secPos2,
+                        onValueChange = { secPos2 = it.uppercase() },
+                        label = { Text("Secondary Pos 2") },
+                        modifier = Modifier.weight(1f).testTag("add_player_sec2")
+                    )
+                }
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
                     label = { Text("Coaching/Availability Notes") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("add_player_notes")
                 )
             }
         },
         confirmButton = {
             Button(
-                onClick = { if (name.isNotEmpty() && jersey.isNotEmpty()) onSave(name, jersey, prefPos, note) },
+                onClick = {
+                    if (name.isNotEmpty() && jersey.isNotEmpty()) {
+                        onSave(name, jersey, prefPos, secPos1, secPos2, note)
+                    }
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = OutfieldGreen),
                 modifier = Modifier.testTag("submit_player_btn")
             ) {
@@ -993,7 +1147,7 @@ fun StatsEditorDialog(
     var rbis by remember { mutableStateOf(player.rbis.toString()) }
     var so by remember { mutableStateOf(player.strikeouts.toString()) }
     var lastGamePitchCount by remember { mutableStateOf(player.lastGamePitchCount.toString()) }
-    var daysSinceLastPitched by remember { mutableStateOf(player.daysSinceLastPitched.toString()) }
+    var daysSinceLastPitched by remember { mutableStateOf((if (player.daysSinceLastPitched == 5) 0 else player.daysSinceLastPitched).toString()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1084,7 +1238,7 @@ fun StatsEditorDialog(
                         rbis.toIntOrNull() ?: 0,
                         so.toIntOrNull() ?: 0,
                         lastGamePitchCount.toIntOrNull() ?: 0,
-                        daysSinceLastPitched.toIntOrNull() ?: 5
+                        daysSinceLastPitched.toIntOrNull() ?: 0
                     )
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = OutfieldGreen)
@@ -1164,6 +1318,51 @@ fun LineupsTab(
             }
         }
         violations
+    }
+
+    // Pitch/catch safety check: players can not pitch and catch in the same game or calendar day
+    val pitchCatchViolations = remember(activeLineup, players, activeGame, gamesList, allLineupEntries) {
+        val violations = mutableListOf<String>()
+        val dateMatches = activeGame?.gameDate ?: ""
+        if (dateMatches.isNotEmpty()) {
+            val sameDayGames = gamesList.filter { it.gameDate == dateMatches }
+            val sameDayGameIds = sameDayGames.map { it.id }.toSet()
+
+            activeLineup.forEach { entry ->
+                val player = playerMap[entry.playerId]
+                if (player != null) {
+                    val totalInns = activeGame?.totalInnings ?: 6
+                    val isCurrentlyPitchingInCurrentGame = (1..totalInns).any { entry.getPosForInning(it) == "P" }
+                    val isCurrentlyCatchingInCurrentGame = (1..totalInns).any { entry.getPosForInning(it) == "C" }
+
+                    // 1. Same game check
+                    if (isCurrentlyPitchingInCurrentGame && isCurrentlyCatchingInCurrentGame) {
+                        violations.add("Safety rule violation: ${player.name} is scheduled to both PITCH and CATCH in this game.")
+                    }
+
+                    // 2. Calendar day check (across all games on same-day)
+                    var hasPitchedToday = false
+                    var hasCaughtToday = false
+
+                    allLineupEntries.forEach { sameEntry ->
+                        if (sameEntry.playerId == player.id && sameDayGameIds.contains(sameEntry.gameId)) {
+                            val matchingGame = sameDayGames.find { it.id == sameEntry.gameId }
+                            val limitInns = matchingGame?.totalInnings ?: 6
+                            for (i in 1..limitInns) {
+                                val pos = sameEntry.getPosForInning(i)
+                                if (pos == "P") hasPitchedToday = true
+                                if (pos == "C") hasCaughtToday = true
+                            }
+                        }
+                    }
+
+                    if (hasPitchedToday && hasCaughtToday) {
+                        violations.add("Safety rule violation: ${player.name} is scheduled to both PITCH and CATCH on this calendar day ($dateMatches).")
+                    }
+                }
+            }
+        }
+        violations.distinct()
     }
 
     // 1. Double assignments (two players on same position in same inning)
@@ -1254,7 +1453,7 @@ fun LineupsTab(
         warnings
     }
 
-    val allLineupWarnings = remember(doubleAssignments, equalBenchViolations, consecutiveBenchViolations, unfilledPositionsWarnings, dismissFairPlayWarnings, pitchSmartViolations) {
+    val allLineupWarnings = remember(doubleAssignments, equalBenchViolations, consecutiveBenchViolations, unfilledPositionsWarnings, dismissFairPlayWarnings, pitchSmartViolations, pitchCatchViolations) {
         val list = mutableListOf<String>()
         list.addAll(doubleAssignments)
         if (!dismissFairPlayWarnings) {
@@ -1263,6 +1462,7 @@ fun LineupsTab(
         }
         list.addAll(unfilledPositionsWarnings)
         list.addAll(pitchSmartViolations)
+        list.addAll(pitchCatchViolations)
         list
     }
 

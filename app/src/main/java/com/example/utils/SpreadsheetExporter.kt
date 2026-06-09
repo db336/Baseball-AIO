@@ -7,6 +7,7 @@ import androidx.core.content.FileProvider
 import com.example.data.Game
 import com.example.data.LineupEntry
 import com.example.data.Player
+import com.example.data.getPosForInning
 import java.io.File
 import java.io.FileWriter
 
@@ -31,7 +32,9 @@ object SpreadsheetExporter {
 
             // Lineup Section
             csvBuilder.append("=== OFFENSIVE LINEUP & INNING DEFENSIVE ROTATIONS ===\n")
-            csvBuilder.append("Batting Order,Player,Jersey,Pref Position,Inning 1,Inning 2,Inning 3,Inning 4,Inning 5,Inning 6\n")
+            val inningsCount = game.totalInnings.coerceIn(1, 10)
+            val inningsHeaders = (1..inningsCount).joinToString(",") { "Inning $it" }
+            csvBuilder.append("Batting Order,Player,Jersey,Pref Position,Sec Position 1,Sec Position 2,$inningsHeaders\n")
 
             // Map player matching IDs for line rows
             val playerMap = players.associateBy { it.id }
@@ -42,20 +45,21 @@ object SpreadsheetExporter {
                 val player = playerMap[entry.playerId]
                 if (player != null) {
                     val orderStr = if (entry.battingOrder > 0) entry.battingOrder.toString() else "BENCH"
-                    csvBuilder.append("\"$orderStr\",\"${player.name}\",\"${player.jerseyNumber}\",\"${player.preferredPosition}\",")
-                    csvBuilder.append("\"${entry.posInning1}\",\"${entry.posInning2}\",\"${entry.posInning3}\",\"${entry.posInning4}\",\"${entry.posInning5}\",\"${entry.posInning6}\"\n")
+                    csvBuilder.append("\"$orderStr\",\"${player.name}\",\"${player.jerseyNumber}\",\"${player.preferredPosition}\",\"${player.secondaryPosition1}\",\"${player.secondaryPosition2}\",")
+                    val positioning = (1..inningsCount).joinToString(",") { "\"${entry.getPosForInning(it)}\"" }
+                    csvBuilder.append("$positioning\n")
                 }
             }
             csvBuilder.append("\n")
 
             // Seasonal Roster Stats Section
             csvBuilder.append("=== TEAM SEASON PLAYER STATISTICS ===\n")
-            csvBuilder.append("Player,Jersey,Pref Position,At Bats,Hits,Walks,Runs,RBIs,Strikeouts,Batting AVG,Coach Notes\n")
+            csvBuilder.append("Player,Jersey,Pref Position,Sec Position 1,Sec Position 2,At Bats,Hits,Walks,Runs,RBIs,Strikeouts,Batting AVG,Coach Notes\n")
             
             players.sortedBy { it.name }.forEach { p ->
                 val battingAvg = if (p.atBats > 0) p.hits.toDouble() / p.atBats else 0.0
                 val formattedAvg = String.format("%.3f", battingAvg)
-                csvBuilder.append("\"${p.name}\",\"${p.jerseyNumber}\",\"${p.preferredPosition}\",")
+                csvBuilder.append("\"${p.name}\",\"${p.jerseyNumber}\",\"${p.preferredPosition}\",\"${p.secondaryPosition1}\",\"${p.secondaryPosition2}\",")
                 csvBuilder.append("${p.atBats},${p.hits},${p.walks},${p.runs},${p.rbis},${p.strikeouts},")
                 csvBuilder.append("\"$formattedAvg\",\"${p.note.replace("\"", "\"\"")}\"\n")
             }

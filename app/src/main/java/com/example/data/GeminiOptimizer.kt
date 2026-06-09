@@ -135,7 +135,7 @@ object GeminiOptimizer {
 
     private fun buildPrompt(players: List<Player>, game: Game): String {
         val playersJson = players.joinToString(separator = "\n") { p ->
-            "Player(id=${p.id}, name='${p.name}', num='${p.jerseyNumber}', preferred='${p.preferredPosition}', hits=${p.hits}, ab=${p.atBats}, avg=${p.battingAverage})"
+            "Player(id=${p.id}, name='${p.name}', num='${p.jerseyNumber}', preferred='${p.preferredPosition}', secondary1='${p.secondaryPosition1}', secondary2='${p.secondaryPosition2}', hits=${p.hits}, ab=${p.atBats}, avg=${p.battingAverage}, pitchSmartEligible=${p.pitchSmartEligible()})"
         }
         
         return """
@@ -155,18 +155,21 @@ object GeminiOptimizer {
             
             REQUIREMENTS:
             1. Batting order: 
-               - Position 1 lead-off should be a high average player (high AVG / hits / speed).
-               - Clean-up spot (4th) and 3rd spot should represent heavy seasonal hits.
-               - Sort active players from battingOrder 1 down to N (number of active players).
+            - Position 1 lead-off should be a high average player (high AVG / hits / speed).
+            - Clean-up spot (4th) and 3rd spot should represent heavy seasonal hits.
+            - Sort active players from battingOrder 1 down to N (number of active players).
             2. Defensive Rotations:
-               - We play ${game.totalInnings} innings.
-               - In each inning (1 to ${game.totalInnings}), assigning a valid position to exactly 9 players on the field.
-               - Positions are: "P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "BENCH".
-               - Minimum defensive requirement: Every active player MUST be placed in fields for at least ${game.minInningsDefense} innings (cannot be "BENCH" more than ${game.totalInnings} minus ${game.minInningsDefense} innings).
-               - Maximum pitching rule: No pitcher (e.g. "P" value) should exceed ${game.maxInningsPitcher} innings in total.
-               - Equal Bench Rotation requirement: If equalBenchRule is true, do not sit any player on the bench for a second time until all active players have sat on the bench at least once.
-               - Max Consecutive Bench requirement: Do not sit any player on the bench for more than ${game.maxConsecutiveBench} consecutive innings.
-               - Exactly 1 player should be assigned to each of the 9 field positions per inning. Excess players are assigned to "BENCH".
+            - We play ${game.totalInnings} innings.
+            - In each inning (1 to ${game.totalInnings}), assigning a valid position to exactly 9 players on the field.
+            - Positions are: "P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "BENCH".
+            - Position Preferences (CRITICAL): Under NO circumstances should any player with `pitchSmartEligible=false` be assigned to the "P" (Pitcher) position in any inning. Only players with `pitchSmartEligible=true` are eligible to pitch.
+            - Primary/Secondary Placement: Attempt to place each player in defensive positions matching their preferred position (`preferred`). If they cannot play their preferred position (or if it is already taken), prioritize assigning them to their secondary positions (`secondary1` or `secondary2`) over completely arbitrary positions.
+            - PITCHER/CATCHER RULE (CRITICAL): No player can both pitch ("P") and catch ("C") in the same game. If a player is assigned "P" in any inning, they can NOT be assigned "C" in any other inning of the same game, and vice versa.
+            - Minimum defensive requirement: Every active player MUST be placed in fields for at least ${game.minInningsDefense} innings (cannot be "BENCH" more than ${game.totalInnings} minus ${game.minInningsDefense} innings).
+            - Maximum pitching rule: No pitcher (e.g. "P" value) should exceed ${game.maxInningsPitcher} innings in total.
+            - Equal Bench Rotation requirement: If equalBenchRule is true, do not sit any player on the bench for a second time until all active players have sat on the bench at least once.
+            - Max Consecutive Bench requirement: Do not sit any player on the bench for more than ${game.maxConsecutiveBench} consecutive innings.
+            - Exactly 1 player should be assigned to each of the 9 field positions per inning. Excess players are assigned to "BENCH".
             
             OUTPUT FORMAT:
             You must output ONLY a valid parsable JSON object, with no conversational fluff outside the JSON. The JSON structure must match this:
@@ -263,7 +266,8 @@ object GeminiOptimizer {
             if (inning > 0) {
                 val lastPitcher = (0 until totalPlayers).find { assignments[it][inning - 1] == "P" }
                 if (lastPitcher != null) {
-                    if (playersOnField.contains(lastPitcher) && pitchInningsCount[lastPitcher] < game.maxInningsPitcher) {
+                    val hasCaught = (0 until inning).any { assignments[lastPitcher][it] == "C" }
+                    if (playersOnField.contains(lastPitcher) && pitchInningsCount[lastPitcher] < game.maxInningsPitcher && players[lastPitcher].pitchSmartEligible() && !hasCaught) {
                         selectedPitcherIdx = lastPitcher
                     } else {
                         hasFinishedPitching[lastPitcher] = true
@@ -271,18 +275,44 @@ object GeminiOptimizer {
                 }
             }
 
+            // Filter players on the field who are pitch smart eligible AND have NOT played Catcher "C"
+            val eligiblePitchersOnField = playersOnField.filter { p ->
+                players[p].pitchSmartEligible() && (0 until inning).none { assignments[p][it] == "C" }
+            }
+
             if (selectedPitcherIdx == null) {
-                selectedPitcherIdx = playersOnField.firstOrNull { p ->
+                selectedPitcherIdx = eligiblePitchersOnField.firstOrNull { p ->
                     pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p] && players[p].preferredPosition == "P"
                 }
             }
             if (selectedPitcherIdx == null) {
-                selectedPitcherIdx = playersOnField.firstOrNull { p ->
+                selectedPitcherIdx = eligiblePitchersOnField.firstOrNull { p ->
+                    pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p] && (players[p].secondaryPosition1 == "P" || players[p].secondaryPosition2 == "P")
+                }
+            }
+            if (selectedPitcherIdx == null) {
+                selectedPitcherIdx = eligiblePitchersOnField.firstOrNull { p ->
                     pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p]
                 }
             }
+            // Absolute fallback: if no pitch-smart eligible players are available, search other players who can pitch and haven't caught
+            if (selectedPitcherIdx == null) {
+                selectedPitcherIdx = playersOnField.firstOrNull { p ->
+                    pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p] && players[p].preferredPosition == "P" && (0 until inning).none { assignments[p][it] == "C" }
+                }
+            }
+            if (selectedPitcherIdx == null) {
+                selectedPitcherIdx = playersOnField.firstOrNull { p ->
+                    pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p] && (players[p].secondaryPosition1 == "P" || players[p].secondaryPosition2 == "P") && (0 until inning).none { assignments[p][it] == "C" }
+                }
+            }
+            if (selectedPitcherIdx == null) {
+                selectedPitcherIdx = playersOnField.firstOrNull { p ->
+                    pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p] && (0 until inning).none { assignments[p][it] == "C" }
+                }
+            }
             if (selectedPitcherIdx == null && playersOnField.isNotEmpty()) {
-                selectedPitcherIdx = playersOnField.first()
+                selectedPitcherIdx = playersOnField.firstOrNull { (0 until inning).none { assignments[it][it] == "C" } } ?: playersOnField.first()
             }
 
             if (selectedPitcherIdx != null) {
@@ -295,19 +325,82 @@ object GeminiOptimizer {
             val remainingPositions = mutableListOf("C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
             val assignedInThisStep = mutableListOf<Int>()
             
+            // Pass 1: Preferred Position
             for (pIdx in playersOnField) {
                 val pref = players[pIdx].preferredPosition
                 if (remainingPositions.contains(pref)) {
+                    if (pref == "C") {
+                        val hasPitched = (0..inning).any { assignments[pIdx][it] == "P" }
+                        if (hasPitched) continue
+                    }
                     assignments[pIdx][inning] = pref
                     remainingPositions.remove(pref)
                     assignedInThisStep.add(pIdx)
                 }
             }
             playersOnField.removeAll(assignedInThisStep)
+            assignedInThisStep.clear()
 
+            // Pass 2: Secondary Position 1
+            for (pIdx in playersOnField) {
+                val sec1 = players[pIdx].secondaryPosition1
+                if (remainingPositions.contains(sec1)) {
+                    if (sec1 == "C") {
+                        val hasPitched = (0..inning).any { assignments[pIdx][it] == "P" }
+                        if (hasPitched) continue
+                    }
+                    assignments[pIdx][inning] = sec1
+                    remainingPositions.remove(sec1)
+                    assignedInThisStep.add(pIdx)
+                }
+            }
+            playersOnField.removeAll(assignedInThisStep)
+            assignedInThisStep.clear()
+
+            // Pass 3: Secondary Position 2
+            for (pIdx in playersOnField) {
+                val sec2 = players[pIdx].secondaryPosition2
+                if (remainingPositions.contains(sec2)) {
+                    if (sec2 == "C") {
+                        val hasPitched = (0..inning).any { assignments[pIdx][it] == "P" }
+                        if (hasPitched) continue
+                    }
+                    assignments[pIdx][inning] = sec2
+                    remainingPositions.remove(sec2)
+                    assignedInThisStep.add(pIdx)
+                }
+            }
+            playersOnField.removeAll(assignedInThisStep)
+
+            // Pass 4: Fallback residual assignments
             for (pIdx in playersOnField) {
                 if (remainingPositions.isNotEmpty()) {
-                    val pos = remainingPositions.removeAt(0)
+                    var pos = remainingPositions[0]
+                    if (pos == "C") {
+                        val hasPitched = (0..inning).any { assignments[pIdx][it] == "P" }
+                        if (hasPitched) {
+                            val nonCPosIdx = remainingPositions.indexOfFirst { it != "C" }
+                            if (nonCPosIdx != -1) {
+                                pos = remainingPositions.removeAt(nonCPosIdx)
+                            } else {
+                                val swapPlayerIdx = (0 until totalPlayers).find { otherP ->
+                                    assignments[otherP][inning] != "BENCH" && assignments[otherP][inning] != "P" && (0..inning).none { assignments[otherP][it] == "P" }
+                                }
+                                if (swapPlayerIdx != null) {
+                                    val otherPos = assignments[swapPlayerIdx][inning]
+                                    assignments[swapPlayerIdx][inning] = "C"
+                                    pos = otherPos
+                                    remainingPositions.remove("C")
+                                } else {
+                                    pos = remainingPositions.removeAt(0)
+                                }
+                            }
+                        } else {
+                            remainingPositions.removeAt(0)
+                        }
+                    } else {
+                        remainingPositions.removeAt(0)
+                    }
                     assignments[pIdx][inning] = pos
                 } else {
                     assignments[pIdx][inning] = "BENCH"

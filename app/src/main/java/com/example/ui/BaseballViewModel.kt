@@ -121,13 +121,22 @@ class BaseballViewModel(
     }
 
     // --- Player Management ---
-    fun addPlayer(name: String, jerseyNumber: String, preferredPosition: String, note: String) {
+    fun addPlayer(
+        name: String,
+        jerseyNumber: String,
+        preferredPosition: String,
+        secondaryPosition1: String = "BENCH",
+        secondaryPosition2: String = "BENCH",
+        note: String
+    ) {
         viewModelScope.launch {
             val nextId = repository.insertPlayer(
                 Player(
                     name = name,
                     jerseyNumber = jerseyNumber,
                     preferredPosition = preferredPosition,
+                    secondaryPosition1 = secondaryPosition1,
+                    secondaryPosition2 = secondaryPosition2,
                     note = note
                 )
             ).toInt()

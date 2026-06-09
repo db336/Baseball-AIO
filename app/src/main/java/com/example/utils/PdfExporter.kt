@@ -19,6 +19,7 @@ import androidx.core.content.FileProvider
 import com.example.data.Game
 import com.example.data.LineupEntry
 import com.example.data.Player
+import com.example.data.getPosForInning
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -119,7 +120,7 @@ object PdfExporter {
             canvas.drawRect(startX, tableY, endX, tableY + rowHeight, paintLine)
 
             // Dynamic columns based on totalInnings
-            val totalInnings = game.totalInnings.coerceIn(3, 9)
+            val totalInnings = game.totalInnings.coerceIn(3, 10)
             val baseCols = mutableListOf<ColumnDef>()
             baseCols.add(ColumnDef(35f, 40f, "BAT"))
             baseCols.add(ColumnDef(75f, 45f, "JERSEY"))
@@ -164,15 +165,7 @@ object PdfExporter {
                             col.title == "PLAYER NAME" -> player.name
                             col.title.startsWith("INN ") -> {
                                 val innNum = col.title.substringAfter("INN ").toIntOrNull() ?: 1
-                                when (innNum) {
-                                    1 -> entry.posInning1
-                                    2 -> entry.posInning2
-                                    3 -> entry.posInning3
-                                    4 -> entry.posInning4
-                                    5 -> entry.posInning5
-                                    6 -> entry.posInning6
-                                    else -> "BENCH"
-                                }
+                                entry.getPosForInning(innNum)
                             }
                             else -> ""
                         }

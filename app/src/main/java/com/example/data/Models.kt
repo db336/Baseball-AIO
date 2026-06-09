@@ -9,6 +9,8 @@ data class Player(
     val name: String,
     val jerseyNumber: String,
     val preferredPosition: String = "LF",
+    val secondaryPosition1: String = "BENCH",
+    val secondaryPosition2: String = "BENCH",
     val isAvailable: Boolean = true,
     // Season Statistics
     val atBats: Int = 0,
@@ -20,7 +22,7 @@ data class Player(
     val note: String = "",
     // PitchSmart tracking fields for 18U
     val lastGamePitchCount: Int = 0,
-    val daysSinceLastPitched: Int = 5
+    val daysSinceLastPitched: Int = 0
 ) {
     val battingAverage: Double
         get() = if (atBats > 0) hits.toDouble() / atBats else 0.0
