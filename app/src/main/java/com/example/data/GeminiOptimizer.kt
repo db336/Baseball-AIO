@@ -61,14 +61,16 @@ object GeminiOptimizer {
      */
     suspend fun optimize(
         players: List<Player>,
-        game: Game
+        game: Game,
+        currentLineups: List<LineupEntry>? = null,
+        lockedInnings: List<Boolean> = emptyList()
     ): OptimizedRosterResult = withContext(Dispatchers.IO) {
         val apiKey = BuildConfig.GEMINI_API_KEY
         
         // If the key is empty or still holds a default template value, skip remote API or fail immediately to trigger local fallback.
-        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
-            Log.d(TAG, "Gemini API key is not configured or placeholder. Directing to local algorithmic optimizer.")
-            return@withContext runLocalOptimization(players, game)
+        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY" || lockedInnings.any { it }) {
+            Log.d(TAG, "Gemini API key is not configured or locked innings are present. Directing to local algorithmic optimizer.")
+            return@withContext runLocalOptimization(players, game, currentLineups, lockedInnings)
         }
 
         val prompt = buildPrompt(players, game)
@@ -89,7 +91,7 @@ object GeminiOptimizer {
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
                 Log.e(TAG, "Gemini API call failed with code: ${response.code}. Response: ${response.body?.string()}")
-                return@withContext runLocalOptimization(players, game)
+                return@withContext runLocalOptimization(players, game, currentLineups, lockedInnings)
             }
 
             val respBody = response.body?.string() ?: ""
@@ -100,12 +102,12 @@ object GeminiOptimizer {
                 return@withContext parsedResult
             } else {
                 Log.e(TAG, "Failed to parse json out of Gemini response.")
-                return@withContext runLocalOptimization(players, game)
+                return@withContext runLocalOptimization(players, game, currentLineups, lockedInnings)
             }
 
         } catch (e: Exception) {
             Log.e(TAG, "Exception during Gemini optimization: ${e.message}", e)
-            return@withContext runLocalOptimization(players, game)
+            return@withContext runLocalOptimization(players, game, currentLineups, lockedInnings)
         }
     }
 
@@ -165,6 +167,7 @@ object GeminiOptimizer {
             - Position Preferences (CRITICAL): Under NO circumstances should any player with `pitchSmartEligible=false` be assigned to the "P" (Pitcher) position in any inning. Only players with `pitchSmartEligible=true` are eligible to pitch.
             - Primary/Secondary Placement: Attempt to place each player in defensive positions matching their preferred position (`preferred`). If they cannot play their preferred position (or if it is already taken), prioritize assigning them to their secondary positions (`secondary1` or `secondary2`) over completely arbitrary positions.
             - PITCHER/CATCHER RULE (CRITICAL): No player can both pitch ("P") and catch ("C") in the same game. If a player is assigned "P" in any inning, they can NOT be assigned "C" in any other inning of the same game, and vice versa.
+            - PITCHER/CATCHER CAPABILITY RULE (CRITICAL): Do not assign a player to "P" (Pitcher) or "C" (Catcher) UNLESS that position is explicitly listed as their preferred, secondary1, or secondary2 position. If no such players are left, leave that fielding spot empty and assign them to BENCH.
             - Minimum defensive requirement: Every active player MUST be placed in fields for at least ${game.minInningsDefense} innings (cannot be "BENCH" more than ${game.totalInnings} minus ${game.minInningsDefense} innings).
             - Maximum pitching rule: No pitcher (e.g. "P" value) should exceed ${game.maxInningsPitcher} innings in total.
             - Equal Bench Rotation requirement: If equalBenchRule is true, do not sit any player on the bench for a second time until all active players have sat on the bench at least once.
@@ -193,7 +196,12 @@ object GeminiOptimizer {
      * Local high-quality rule-compliant algorithmic fallback optimizer.
      * Ensures perfect field counts, follows pitcher restrictions, and rotates the bench optimally.
      */
-    fun runLocalOptimization(players: List<Player>, game: Game): OptimizedRosterResult {
+    fun runLocalOptimization(
+        players: List<Player>, 
+        game: Game,
+        currentLineups: List<LineupEntry>? = null,
+        lockedInnings: List<Boolean> = emptyList()
+    ): OptimizedRosterResult {
         // 1. Batting Order: Sort by seasonal batting average (highest average first) then jersey number for ties
         val sortedPlayers = players.sortedWith(
             compareByDescending<Player> { it.battingAverage }
@@ -211,7 +219,45 @@ object GeminiOptimizer {
         val pitchInningsCount = IntArray(totalPlayers) { 0 }
         val hasFinishedPitching = BooleanArray(totalPlayers) { false }
 
+        val playerToLineup = currentLineups?.associateBy { it.playerId } ?: emptyMap()
+
         for (inning in 0 until totalInn) {
+            if (lockedInnings.getOrNull(inning) == true) {
+                for (p in 0 until totalPlayers) {
+                    val player = players[p]
+                    val entry = playerToLineup[player.id]
+                    val pos = if (entry != null) {
+                        when (inning) {
+                            0 -> entry.posInning1
+                            1 -> entry.posInning2
+                            2 -> entry.posInning3
+                            3 -> entry.posInning4
+                            4 -> entry.posInning5
+                            5 -> entry.posInning6
+                            6 -> entry.posInning7
+                            7 -> entry.posInning8
+                            8 -> entry.posInning9
+                            9 -> entry.posInning10
+                            else -> "BENCH"
+                        }
+                    } else "BENCH"
+                    
+                    assignments[p][inning] = pos
+                    
+                    if (pos == "BENCH") {
+                        sitCounts[p]++
+                        consecutiveBench[p]++
+                    } else {
+                        consecutiveBench[p] = 0
+                        if (pos == "P") pitchInningsCount[p]++
+                    }
+                    if (pos != "P" && pitchInningsCount[p] > 0) {
+                        hasFinishedPitching[p] = true
+                    }
+                }
+                continue // Skip the rest of the optimization for this inning
+            }
+
             val mustPlay = mutableListOf<Int>()
             for (p in 0 until totalPlayers) {
                 if (consecutiveBench[p] >= game.maxConsecutiveBench) {
@@ -291,12 +337,6 @@ object GeminiOptimizer {
                 }
             }
             if (selectedPitcherIdx == null) {
-                selectedPitcherIdx = eligiblePitchersOnField.firstOrNull { p ->
-                    pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p]
-                }
-            }
-            // Absolute fallback: if no pitch-smart eligible players are available, search other players who can pitch and haven't caught
-            if (selectedPitcherIdx == null) {
                 selectedPitcherIdx = playersOnField.firstOrNull { p ->
                     pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p] && players[p].preferredPosition == "P" && (0 until inning).none { assignments[p][it] == "C" }
                 }
@@ -305,14 +345,6 @@ object GeminiOptimizer {
                 selectedPitcherIdx = playersOnField.firstOrNull { p ->
                     pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p] && (players[p].secondaryPosition1 == "P" || players[p].secondaryPosition2 == "P") && (0 until inning).none { assignments[p][it] == "C" }
                 }
-            }
-            if (selectedPitcherIdx == null) {
-                selectedPitcherIdx = playersOnField.firstOrNull { p ->
-                    pitchInningsCount[p] < game.maxInningsPitcher && !hasFinishedPitching[p] && (0 until inning).none { assignments[p][it] == "C" }
-                }
-            }
-            if (selectedPitcherIdx == null && playersOnField.isNotEmpty()) {
-                selectedPitcherIdx = playersOnField.firstOrNull { (0 until inning).none { assignments[it][it] == "C" } } ?: playersOnField.first()
             }
 
             if (selectedPitcherIdx != null) {
@@ -373,34 +405,11 @@ object GeminiOptimizer {
             playersOnField.removeAll(assignedInThisStep)
 
             // Pass 4: Fallback residual assignments
+            remainingPositions.remove("C") // Never assign C as a fallback if it wasn't a preferred/secondary position
             for (pIdx in playersOnField) {
                 if (remainingPositions.isNotEmpty()) {
                     var pos = remainingPositions[0]
-                    if (pos == "C") {
-                        val hasPitched = (0..inning).any { assignments[pIdx][it] == "P" }
-                        if (hasPitched) {
-                            val nonCPosIdx = remainingPositions.indexOfFirst { it != "C" }
-                            if (nonCPosIdx != -1) {
-                                pos = remainingPositions.removeAt(nonCPosIdx)
-                            } else {
-                                val swapPlayerIdx = (0 until totalPlayers).find { otherP ->
-                                    assignments[otherP][inning] != "BENCH" && assignments[otherP][inning] != "P" && (0..inning).none { assignments[otherP][it] == "P" }
-                                }
-                                if (swapPlayerIdx != null) {
-                                    val otherPos = assignments[swapPlayerIdx][inning]
-                                    assignments[swapPlayerIdx][inning] = "C"
-                                    pos = otherPos
-                                    remainingPositions.remove("C")
-                                } else {
-                                    pos = remainingPositions.removeAt(0)
-                                }
-                            }
-                        } else {
-                            remainingPositions.removeAt(0)
-                        }
-                    } else {
-                        remainingPositions.removeAt(0)
-                    }
+                    remainingPositions.removeAt(0)
                     assignments[pIdx][inning] = pos
                 } else {
                     assignments[pIdx][inning] = "BENCH"

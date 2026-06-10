@@ -51,6 +51,12 @@ import com.example.data.Player
 import com.example.data.getPosForInning
 import com.example.data.setPosForInning
 import com.example.ui.theme.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.example.utils.RosterCsvHelper
 
 // Supported defensive choices
 val POSITIONS = listOf("P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "BENCH")
@@ -229,7 +235,8 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                         onDeletePlayer = { viewModel.deletePlayer(it) },
                         onUpdateStats = { p, ab, h, w, r, rbi, so, pit, rst -> 
                             viewModel.updatePlayerStats(p, ab, h, w, r, rbi, so, pit, rst) 
-                        }
+                        },
+                        onImportRoster = { list, replace -> viewModel.importRoster(list, replace) }
                     )
                     "lineups" -> LineupsTab(
                         players = players,
@@ -240,7 +247,7 @@ fun DashboardScreen(viewModel: BaseballViewModel) {
                         coachMessage = coachMessage,
                         gamesList = games,
                         onSelectGame = { viewModel.selectActiveGame(it) },
-                        onOptimize = { ai -> viewModel.optimizeLineup(aiMode = ai) },
+                        onOptimize = { ai, lockedInnings -> viewModel.optimizeLineup(aiMode = ai, lockedInnings = lockedInnings) },
                         onUpdateEntry = { viewModel.updateSingleLineupEntry(it) },
                         onPrintPdf = { viewModel.triggerPrintPdf() },
                         onExportPdf = { viewModel.triggerExportPdf() },
@@ -435,7 +442,8 @@ fun RosterTab(
     onAddClick: () -> Unit,
     onUpdatePlayer: (Player) -> Unit,
     onDeletePlayer: (Int) -> Unit,
-    onUpdateStats: (Player, Int, Int, Int, Int, Int, Int, Int, Int) -> Unit
+    onUpdateStats: (Player, Int, Int, Int, Int, Int, Int, Int, Int) -> Unit,
+    onImportRoster: (List<Player>, Boolean) -> Unit
 ) {
     var selectedPlayerForStats by remember { mutableStateOf<Player?>(null) }
 
@@ -503,6 +511,8 @@ fun RosterTab(
             }
         }
 
+        val activeCount = players.count { it.isAvailable }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -516,10 +526,19 @@ fun RosterTab(
                     color = BaseballWhite
                 )
                 Text(
-                    text = "${players.size} active players on the squad",
+                    text = "$activeCount active players on the squad",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextSecondary
                 )
+                if (activeCount < 9 && players.isNotEmpty()) {
+                    Text(
+                        text = "⚠ Less than 9 active players!",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFF59E0B), // warning amber/yellow
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             }
             Button(
                 onClick = onAddClick,
@@ -529,6 +548,53 @@ fun RosterTab(
                 Icon(imageVector = Icons.Default.Add, contentDescription = "Add")
                 Spacer(modifier = Modifier.width(4.dp))
                 Text("Add Player", fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            var showImportDialog by remember { mutableStateOf(false) }
+            var showExportDialog by remember { mutableStateOf(false) }
+
+            OutlinedButton(
+                onClick = { showImportDialog = true },
+                modifier = Modifier.weight(1f).testTag("import_csv_button"),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = OutfieldGreen),
+                border = BorderStroke(1.dp, OutfieldGreen.copy(alpha = 0.5f))
+            ) {
+                Icon(imageVector = Icons.Default.Upload, contentDescription = "Import", modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Import CSV", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            OutlinedButton(
+                onClick = { showExportDialog = true },
+                modifier = Modifier.weight(1f).testTag("export_csv_button"),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = TurfLime),
+                border = BorderStroke(1.dp, TurfLime.copy(alpha = 0.5f))
+            ) {
+                Icon(imageVector = Icons.Default.Share, contentDescription = "Export", modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Export CSV", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            if (showImportDialog) {
+                RosterImportDialog(
+                    onDismiss = { showImportDialog = false },
+                    onImport = onImportRoster
+                )
+            }
+
+            if (showExportDialog) {
+                RosterExportDialog(
+                    players = players,
+                    onDismiss = { showExportDialog = false }
+                )
             }
         }
 
@@ -1264,7 +1330,7 @@ fun LineupsTab(
     coachMessage: String,
     gamesList: List<Game>,
     onSelectGame: (Int) -> Unit,
-    onOptimize: (Boolean) -> Unit,
+    onOptimize: (Boolean, List<Boolean>) -> Unit,
     onUpdateEntry: (LineupEntry) -> Unit,
     onPrintPdf: () -> Unit,
     onExportPdf: () -> Unit,
@@ -1274,6 +1340,7 @@ fun LineupsTab(
 ) {
     var showSelectGameDropdown by remember { mutableStateOf(false) }
     var dismissFairPlayWarnings by remember(activeLineup, activeGame) { mutableStateOf(false) }
+    var lockedInnings by remember(activeGame) { mutableStateOf(List(10) { false }) }
     
     // In-line validation checks:
     val playerMap = remember(players) { players.associateBy { it.id } }
@@ -1627,7 +1694,7 @@ fun LineupsTab(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
-                            onClick = { onOptimize(false) },
+                            onClick = { onOptimize(false, lockedInnings) },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE2E8F0)),
                             shape = RoundedCornerShape(20.dp),
                             modifier = Modifier
@@ -1745,6 +1812,47 @@ fun LineupsTab(
                     color = TextSecondary,
                     fontSize = 11.sp
                 )
+
+                if (activeLineup.isNotEmpty()) {
+                    Text(
+                        text = "Lock Innings:",
+                        color = BaseballWhite,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                    Text(
+                        text = "Checked innings will NOT be modified by the lineup optimizer.",
+                        color = TextSecondary,
+                        fontSize = 10.sp
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                            .padding(start = 44.dp), // offset for the grab handle and batting order icons
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        val inningsList = (1..totalInnings).toList()
+                        inningsList.forEach { inn ->
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                                Text(text = "I$inn", fontSize = 10.sp, color = TextSecondary)
+                                androidx.compose.material3.Checkbox(
+                                    checked = lockedInnings.getOrNull(inn - 1) ?: false,
+                                    onCheckedChange = { isChecked ->
+                                        val newLocks = lockedInnings.toMutableList()
+                                        if (inn - 1 < newLocks.size) {
+                                            newLocks[inn - 1] = isChecked
+                                            lockedInnings = newLocks
+                                        }
+                                    },
+                                    colors = androidx.compose.material3.CheckboxDefaults.colors(checkedColor = OutfieldGreen, uncheckedColor = TextSecondary),
+                                    modifier = Modifier.scale(0.8f) // Make checkboxes slightly smaller
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -3139,4 +3247,309 @@ fun ScheduleTab(
             }
         }
     }
+}
+
+@Composable
+fun RosterImportDialog(
+    onDismiss: () -> Unit,
+    onImport: (List<Player>, Boolean) -> Unit
+) {
+    var csvInputText by remember { mutableStateOf("") }
+    var replaceExisting by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                    val text = inputStream.bufferedReader().readText()
+                    if (text.isNotBlank()) {
+                        csvInputText = text
+                        Toast.makeText(context, "CSV file loaded!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Error loading file: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val detectedPlayers = remember(csvInputText) {
+        if (csvInputText.isBlank()) emptyList()
+        else {
+            try {
+                RosterCsvHelper.parseFromCsv(csvInputText)
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Upload,
+                    contentDescription = null,
+                    tint = OutfieldGreen,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Import Player Roster (CSV)",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = BaseballWhite,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "Import players by selecting a .csv file or pasting CSV text. Column headers: Name, Jersey, PreferredPosition, SecondaryPosition1, SecondaryPosition2, Note...",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.05f)),
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, StadiumGrayBorder.copy(alpha = 0.3f))
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "Import Mode:",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = TurfLime
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clickable { replaceExisting = false }
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            RadioButton(
+                                selected = !replaceExisting,
+                                onClick = { replaceExisting = false },
+                                colors = RadioButtonDefaults.colors(selectedColor = OutfieldGreen)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column {
+                                Text("Append to current roster", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = BaseballWhite)
+                                Text("Keep existing players and add the new ones", fontSize = 10.sp, color = TextSecondary)
+                            }
+                        }
+                        
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clickable { replaceExisting = true }
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            RadioButton(
+                                selected = replaceExisting,
+                                onClick = { replaceExisting = true },
+                                colors = RadioButtonDefaults.colors(selectedColor = Color.Red)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column {
+                                Text("Replace roster completely", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = BaseballWhite)
+                                Text("Deletes all existing players of the squad", fontSize = 10.sp, color = TextSecondary)
+                            }
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = { filePickerLauncher.launch("*/*") },
+                    colors = ButtonDefaults.buttonColors(containerColor = OutfieldGreen),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(imageVector = Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Select CSV File", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+
+                Text(
+                    text = "Or Paste CSV text content manually:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BaseballWhite,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+
+                OutlinedTextField(
+                    value = csvInputText,
+                    onValueChange = { csvInputText = it },
+                    placeholder = { Text("Name,Jersey,PreferredPosition,...\nJohn,42,SS,BENCH,BENCH\nJane,3,CF,RF,LF", color = TextSecondary.copy(alpha = 0.5f)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(110.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = BaseballWhite,
+                        unfocusedTextColor = BaseballWhite,
+                        focusedLabelColor = TurfLime,
+                        unfocusedLabelColor = TextSecondary,
+                        focusedBorderColor = TurfLime,
+                        unfocusedBorderColor = StadiumGrayBorder
+                    ),
+                    textStyle = LocalTextStyle.current.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                )
+
+                if (detectedPlayers.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(OutfieldGreen.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
+                            .border(1.dp, OutfieldGreen.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                            .padding(8.dp)
+                    ) {
+                        Text(
+                            text = "Parsed ${detectedPlayers.size} players! Ready to import.",
+                            color = TurfLime,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (detectedPlayers.isNotEmpty()) {
+                        onImport(detectedPlayers, replaceExisting)
+                        onDismiss()
+                    }
+                },
+                enabled = detectedPlayers.isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(containerColor = TurfLime)
+            ) {
+                Text("Import Players", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        },
+        containerColor = StadiumSlateSurface
+    )
+}
+
+@Composable
+fun RosterExportDialog(
+    players: List<Player>,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    
+    val csvText = remember(players) {
+        RosterCsvHelper.exportToCsv(players)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Share,
+                    contentDescription = null,
+                    tint = TurfLime,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Export Player Roster (CSV)",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = BaseballWhite,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "Share the roster sheet with other coaches or copy it directly into other devices.",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+
+                // Share Button
+                Button(
+                    onClick = { RosterCsvHelper.shareRosterCsv(context, players) },
+                    colors = ButtonDefaults.buttonColors(containerColor = OutfieldGreen),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Share CSV File ...", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+
+                // Copy Button
+                OutlinedButton(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(csvText))
+                        Toast.makeText(context, "Copied roster CSV to clipboard!", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TurfLime),
+                    border = BorderStroke(1.dp, TurfLime)
+                ) {
+                    Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Copy CSV Text", fontWeight = FontWeight.Bold)
+                }
+
+                Text(
+                    text = "CSV Preview Content:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BaseballWhite,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+
+                // Read-only text box
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(110.dp)
+                        .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(6.dp))
+                        .border(1.dp, StadiumGrayBorder.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                        .padding(8.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = csvText,
+                        color = BaseballWhite.copy(alpha = 0.8f),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = TurfLime)
+            ) {
+                Text("Done", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        containerColor = StadiumSlateSurface
+    )
 }

@@ -30,6 +30,7 @@ class BaseballRepository(private val db: AppDatabase) {
         dao.insertLineupEntries(entries)
     }
     suspend fun deleteLineupForGame(gameId: Int) = dao.deleteLineupForGame(gameId)
+    suspend fun deleteLineupsForPlayer(playerId: Int) = dao.deleteLineupsForPlayer(playerId)
 
     suspend fun insertAnnouncement(announcement: Announcement) = dao.insertAnnouncement(announcement)
     suspend fun clearAnnouncements() = dao.clearAnnouncements()

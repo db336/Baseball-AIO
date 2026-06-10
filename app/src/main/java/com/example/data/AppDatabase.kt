@@ -62,6 +62,9 @@ interface BaseballDao {
     @Query("DELETE FROM lineup_entries WHERE gameId = :gameId")
     suspend fun deleteLineupForGame(gameId: Int)
 
+    @Query("DELETE FROM lineup_entries WHERE playerId = :playerId")
+    suspend fun deleteLineupsForPlayer(playerId: Int)
+
     // --- Announcements ---
     @Query("SELECT * FROM announcements ORDER BY timestamp DESC")
     fun getAllAnnouncements(): Flow<List<Announcement>>

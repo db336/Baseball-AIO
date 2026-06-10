@@ -158,14 +158,46 @@ class BaseballViewModel(
         }
     }
 
+    fun importRoster(playersList: List<Player>, replaceExisting: Boolean) {
+        viewModelScope.launch {
+            if (replaceExisting) {
+                val current = players.value
+                for (p in current) {
+                    repository.deletePlayer(p.id)
+                }
+            }
+            for (p in playersList) {
+                val nextId = repository.insertPlayer(p).toInt()
+                
+                val activeId = _activeGameId.value
+                if (activeId != null && p.isAvailable) {
+                    val currentLineupSize = repository.getLineupForGame(activeId).size
+                    repository.saveLineupEntries(
+                        listOf(
+                            LineupEntry(
+                                gameId = activeId,
+                                playerId = nextId,
+                                battingOrder = currentLineupSize + 1
+                            )
+                        )
+                    )
+                }
+            }
+        }
+    }
+
     fun updatePlayer(player: Player) {
         viewModelScope.launch {
             repository.updatePlayer(player)
+            if (!player.isAvailable) {
+                repository.deleteLineupsForPlayer(player.id)
+            }
         }
     }
 
     fun deletePlayer(id: Int) {
         viewModelScope.launch {
+            repository.deleteLineupsForPlayer(id)
             repository.deletePlayer(id)
         }
     }
@@ -277,7 +309,7 @@ class BaseballViewModel(
             _activeGameId.value = newId
 
             // Copy over existing active roster, setting initial lineup records
-            val activePlayers = players.value
+            val activePlayers = players.value.filter { it.isAvailable }
             val entries = activePlayers.mapIndexed { idx, player ->
                 LineupEntry(
                     gameId = newId,
@@ -420,9 +452,9 @@ class BaseballViewModel(
         _syncOn.value = enabled
     }
 
-    fun optimizeLineup(aiMode: Boolean) {
+    fun optimizeLineup(aiMode: Boolean, lockedInnings: List<Boolean> = emptyList()) {
         val activeGameObj = activeGame.value ?: return
-        val currentPlayers = players.value
+        val currentPlayers = players.value.filter { it.isAvailable }
         if (currentPlayers.isEmpty()) return
 
         _isOptimizing.value = true
@@ -430,13 +462,14 @@ class BaseballViewModel(
 
         viewModelScope.launch {
             try {
+                val currentLineups = repository.getLineupForGame(activeGameObj.id)
                 if (aiMode) {
-                    val result = GeminiOptimizer.optimize(currentPlayers, activeGameObj)
-                    applyOptimizedResult(result, activeGameObj.id)
+                    val result = GeminiOptimizer.optimize(currentPlayers, activeGameObj, currentLineups, lockedInnings)
+                    applyOptimizedResult(result, activeGameObj.id, lockedInnings)
                     _coachMessage.value = result.coachStrategyExplanation
                 } else {
-                    val result = GeminiOptimizer.runLocalOptimization(currentPlayers, activeGameObj)
-                    applyOptimizedResult(result, activeGameObj.id)
+                    val result = GeminiOptimizer.runLocalOptimization(currentPlayers, activeGameObj, currentLineups, lockedInnings)
+                    applyOptimizedResult(result, activeGameObj.id, lockedInnings)
                     _coachMessage.value = result.coachStrategyExplanation + " (Optimized offline)"
                 }
             } catch (e: Exception) {
@@ -448,7 +481,11 @@ class BaseballViewModel(
         }
     }
 
-    private suspend fun applyOptimizedResult(result: GeminiOptimizer.OptimizedRosterResult, gameId: Int) {
+    private suspend fun applyOptimizedResult(
+        result: GeminiOptimizer.OptimizedRosterResult,
+        gameId: Int,
+        lockedInnings: List<Boolean> = emptyList()
+    ) {
         val databaseSavedLineups = repository.getLineupForGame(gameId)
         val entryMap = databaseSavedLineups.associateBy { it.playerId }
 
